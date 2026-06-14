@@ -76,19 +76,15 @@ async function fetchGoogleTokenInfo(idToken) {
 }
 
 // Google OAuth configuration
-// Enforcing usage of .env variables for security
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-if (!GOOGLE_CLIENT_ID && process.env.NODE_ENV === 'production') {
-  console.warn('⚠️ GOOGLE_CLIENT_ID is not set in .env. Google Sign-In will fail.');
-}
-
+const DEFAULT_GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const configuredGoogleClientIds = process.env.GOOGLE_CLIENT_IDS
   ? process.env.GOOGLE_CLIENT_IDS.split(',').map(id => id.trim()).filter(Boolean)
   : [];
 const GOOGLE_CLIENT_IDS = Array.from(
   new Set([
-    ...(GOOGLE_CLIENT_ID ? [GOOGLE_CLIENT_ID.trim()] : []),
+    ...(process.env.GOOGLE_CLIENT_ID ? [process.env.GOOGLE_CLIENT_ID.trim()] : []),
     ...configuredGoogleClientIds,
+    DEFAULT_GOOGLE_CLIENT_ID,
   ])
 );
 
