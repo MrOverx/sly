@@ -76,15 +76,19 @@ async function fetchGoogleTokenInfo(idToken) {
 }
 
 // Google OAuth configuration
-const DEFAULT_GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '638788559518-has2jchutlob4bj1cud789u2vjs13pkv.apps.googleusercontent.com';
+// Enforcing usage of .env variables for security
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+if (!GOOGLE_CLIENT_ID && process.env.NODE_ENV === 'production') {
+  console.warn('⚠️ GOOGLE_CLIENT_ID is not set in .env. Google Sign-In will fail.');
+}
+
 const configuredGoogleClientIds = process.env.GOOGLE_CLIENT_IDS
   ? process.env.GOOGLE_CLIENT_IDS.split(',').map(id => id.trim()).filter(Boolean)
   : [];
 const GOOGLE_CLIENT_IDS = Array.from(
   new Set([
-    ...(process.env.GOOGLE_CLIENT_ID ? [process.env.GOOGLE_CLIENT_ID.trim()] : []),
+    ...(GOOGLE_CLIENT_ID ? [GOOGLE_CLIENT_ID.trim()] : []),
     ...configuredGoogleClientIds,
-    DEFAULT_GOOGLE_CLIENT_ID,
   ])
 );
 
