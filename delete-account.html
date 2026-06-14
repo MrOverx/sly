@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify & Delete Account</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a, #111827);
+      color: #f8fafc;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(100%, 480px);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.5rem;
+    }
+    p {
+      color: #cbd5e1;
+      line-height: 1.5;
+      margin: 0 0 16px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #475569;
+      background: #020617;
+      color: white;
+      margin-bottom: 12px;
+      box-sizing: border-box;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: #38bdf8;
+      color: #082f49;
+    }
+    .btn-danger {
+      background: #ef4444;
+      color: white;
+    }
+    .status {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #1e293b;
+      min-height: 48px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+    .status.success { border-left: 4px solid #22c55e; color: #dcfce7; }
+    .status.error { border-left: 4px solid #ef4444; color: #fee2e2; }
+    .status.info { border-left: 4px solid #38bdf8; }
+    .input-valid { border-color: #22c55e !important; box-shadow: 0 0 0 1px rgba(34,197,94,0.35); }
+    .input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 1px rgba(239,68,68,0.35); }
+    .btn-danger:disabled,
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .muted { color: #94a3b8; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Verify & Delete Account</h1>
+    <p>Enter your email and password to verify the account before deleting it.</p>
+
+    <form id="verifyForm">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="Enter email" required />
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Enter password" required />
+
+      <div class="actions">
+        <button type="submit" class="btn-primary">Verify account</button>
+      </div>
+    </form>
+
+    <div class="status info" id="verifyStatus">Waiting for verification…</div>
+
+    <hr style="margin: 20px 0; border-color: rgba(148,163,184,0.2);" />
+
+    <div class="muted">This action permanently removes the user account and related records.</div>
+    <div class="actions" style="margin-top: 12px;">
+      <button type="button" class="btn-danger" id="deleteBtn" disabled>Delete account</button>
+    </div>
+  </div>
+
+  <script>
+    const verifyForm = document.getElementById('verifyForm');
+    const verifyStatus = document.getElementById('verifyStatus');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const emailInput = document.getElementById('email');
+    const passwordInput = document.getElementById('password');
+
+    let isVerified = false;
+
+    function setStatus(message, type = 'info') {
+      verifyStatus.textContent = message;
+      verifyStatus.className = `status ${type}`.trim();
+    }
+
+    function setVerificationState(verified) {
+      isVerified = verified;
+      deleteBtn.disabled = !verified;
+      emailInput.classList.toggle('input-valid', verified);
+      passwordInput.classList.toggle('input-valid', verified);
+      emailInput.classList.toggle('input-error', !verified && emailInput.value.trim());
+      passwordInput.classList.toggle('input-error', !verified && passwordInput.value);
+    }
+
+    function getErrorMessage(data) {
+      if (typeof data?.message === 'string' && data.message.trim()) {
+        return data.message;
+      }
+      if (typeof data?.error === 'string' && data.error.trim()) {
+        return data.error;
+      }
+      if (data?.error && typeof data.error === 'object') {
+        return data.error.message || 'Request failed.';
+      }
+      return 'Request failed.';
+    }
+
+    verifyForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+      if (!email || !password) {
+        setVerificationState(false);
+        setStatus('Please enter both email and password.', 'error');
+        return;
+      }
+
+      setStatus('Checking account…', 'info');
+      try {
+        const response = await fetch('/auth/verify-account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setVerificationState(false);
+          setStatus(getErrorMessage(data) || 'Verification failed.', 'error');
+          return;
+        }
+
+        setVerificationState(true);
+        setStatus(`✅ Account verified\nUser: ${data?.userName || 'N/A'}\nEmail: ${data?.email || 'N/A'}\nYou can now delete the account.`, 'success');
+      } catch (error) {
+        setVerificationState(false);
+        setStatus(`Request failed: ${error.message}`, 'error');
+      }
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+      if (!email || !password) {
+        setVerificationState(false);
+        setStatus('Please enter both email and password before deleting.', 'error');
+        return;
+      }
+
+      if (!isVerified) {
+        setStatus('Please verify the account first before deleting it.', 'error');
+        return;
+      }
+
+      const confirmed = window.confirm(`Delete account for ${email}? This cannot be undone.`);
+      if (!confirmed) {
+        return;
+      }
+
+      setStatus('Deleting account…', 'info');
+      try {
+        const response = await fetch('/auth/delete-account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setVerificationState(false);
+          setStatus(getErrorMessage(data) || 'Delete request failed.', 'error');
+          return;
+        }
+
+        setVerificationState(false);
+        emailInput.value = '';
+        passwordInput.value = '';
+        setStatus(`✅ ${data?.message || `Account deleted successfully for ${email}.`}`, 'success');
+      } catch (error) {
+        setVerificationState(false);
+        setStatus(`Delete request failed: ${error.message}`, 'error');
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "slyxyserver",
+  "version": "1.41.0",
+  "main": "ws_server.js",
+  "scripts": {
+    "start": "node ws_server.js",
+    "dev": "nodemon ws_server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "SLYXY WebSocket Server with MongoDB Backend",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^5.2.1",
+    "helmet": "^7.1.0",
+    "mongoose": "^7.5.0",
+    "nodemailer": "^6.9.14",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
