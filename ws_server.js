@@ -1131,8 +1131,7 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
       return sendError(res, 401, 'Invalid email or password', 'INVALID_CREDENTIALS');
     }
 
-    user.lastLogin = new Date();
-    await user.save();
+    await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
 
     Logger.info('auth/login', '✅ User logged in', { userId: user.userId, email: user.email });
 
