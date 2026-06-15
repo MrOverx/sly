@@ -255,7 +255,7 @@ const dbNameMatch = MONGODB_URI.match(/^[^?]*\/([^?\/]+)(\?|$)/);
 const configuredDb = dbNameMatch ? dbNameMatch[1] : null;
 if (!configuredDb) {
   console.error('❌ MongoDB URI does not include a database name. This backend requires a target database.');
-  console.error('   Expected URI like: mongodb+srv://user:password@cluster.mongodb.net/lolcluster?retryWrites=true&w=majority');
+
   process.exit(1);
 }
 if (configuredDb !== 'lolcluster') {
