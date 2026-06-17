@@ -462,10 +462,15 @@ async function deleteFriendRelationship(userId, friendId) {
 
 async function queryFriendRequestsBySender(userId) {
   if (!userId) return [];
-  const result = await ddb.send(new QueryCommand({
+  await loadTableSchema();
+
+  const hashKeyName = TABLE_HASH_KEY;
+  const keyNameAlias = '#hashKey';
+  const queryParams = {
     TableName: TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk',
+    KeyConditionExpression: `${keyNameAlias} = :pk`,
     ExpressionAttributeNames: {
+      [keyNameAlias]: hashKeyName,
       '#status': 'status',
     },
     FilterExpression: '#status = :pending',
@@ -473,13 +478,32 @@ async function queryFriendRequestsBySender(userId) {
       ':pk': `${FRIEND_PREFIX}${userId}`,
       ':pending': 'pending',
     },
-  }));
-  return result.Items || [];
+  };
+
+  try {
+    const result = await ddb.send(new QueryCommand(queryParams));
+    return result.Items || [];
+  } catch (err) {
+    const scanResult = await ddb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: 'itemType = :friendType AND userId = :userId AND #status = :pending',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+      },
+      ExpressionAttributeValues: {
+        ':friendType': 'FRIEND',
+        ':userId': userId,
+        ':pending': 'pending',
+      },
+    }));
+    return scanResult.Items || [];
+  }
 }
 
 async function queryFriendRequestsByRecipient(userId) {
   if (!userId) return [];
-  const result = await ddb.send(new QueryCommand({
+
+  const executeQuery = async () => ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     IndexName: 'FriendByFriendIdIndex',
     KeyConditionExpression: 'friendIndexKey = :friendIndexKey',
@@ -492,37 +516,95 @@ async function queryFriendRequestsByRecipient(userId) {
       ':pending': 'pending',
     },
   }));
-  return result.Items || [];
+
+  try {
+    const result = await executeQuery();
+    return result.Items || [];
+  } catch (err) {
+    if (String(err.message).includes('does not have the specified index') || String(err.message).includes('Query condition missed key schema element')) {
+      const scanResult = await ddb.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: 'friendIndexKey = :friendIndexKey AND #status = :pending',
+        ExpressionAttributeNames: {
+          '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+          ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
+          ':pending': 'pending',
+        },
+      }));
+      return scanResult.Items || [];
+    }
+    throw err;
+  }
 }
 
 async function listFriendsForUser(userId) {
   if (!userId) return [];
-  const outgoing = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk',
-    ExpressionAttributeNames: {
-      '#status': 'status',
-    },
-    FilterExpression: '#status = :accepted',
-    ExpressionAttributeValues: {
-      ':pk': `${FRIEND_PREFIX}${userId}`,
-      ':accepted': 'accepted',
-    },
-  }));
+  await loadTableSchema();
 
-  const incoming = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    IndexName: 'FriendByFriendIdIndex',
-    KeyConditionExpression: 'friendIndexKey = :friendIndexKey',
-    ExpressionAttributeNames: {
-      '#status': 'status',
-    },
-    FilterExpression: '#status = :accepted',
-    ExpressionAttributeValues: {
-      ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
-      ':accepted': 'accepted',
-    },
-  }));
+  const hashKeyName = TABLE_HASH_KEY;
+  const keyNameAlias = '#hashKey';
+  let outgoing;
+  try {
+    outgoing = await ddb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: `${keyNameAlias} = :pk`,
+      ExpressionAttributeNames: {
+        [keyNameAlias]: hashKeyName,
+        '#status': 'status',
+      },
+      FilterExpression: '#status = :accepted',
+      ExpressionAttributeValues: {
+        ':pk': `${FRIEND_PREFIX}${userId}`,
+        ':accepted': 'accepted',
+      },
+    }));
+  } catch (err) {
+    const fallback = await ddb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: 'itemType = :friendType AND userId = :userId AND #status = :accepted',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+      },
+      ExpressionAttributeValues: {
+        ':friendType': 'FRIEND',
+        ':userId': userId,
+        ':accepted': 'accepted',
+      },
+    }));
+    outgoing = fallback;
+  }
+
+  let incoming;
+  try {
+    incoming = await ddb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'FriendByFriendIdIndex',
+      KeyConditionExpression: 'friendIndexKey = :friendIndexKey',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+      },
+      FilterExpression: '#status = :accepted',
+      ExpressionAttributeValues: {
+        ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
+        ':accepted': 'accepted',
+      },
+    }));
+  } catch (err) {
+    const fallback = await ddb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: 'friendIndexKey = :friendIndexKey AND #status = :accepted',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+      },
+      ExpressionAttributeValues: {
+        ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
+        ':accepted': 'accepted',
+      },
+    }));
+    incoming = fallback;
+  }
 
   const outgoingIds = (outgoing.Items || []).map((item) => item.friendId);
   const incomingIds = (incoming.Items || []).map((item) => item.userId);
