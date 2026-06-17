@@ -128,7 +128,7 @@ const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
-const { uploadProfileImageToS3 } = require('./utils/s3Service');
+const { uploadProfileImageToS3, isS3Configured } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
 
@@ -277,7 +277,18 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 
 // Profile image upload endpoint
+if (!isS3Configured()) {
+  Logger.warn('upload', 'AWS_S3_BUCKET is not configured. /upload will return S3_CONFIG_MISSING until configured.');
+}
+
 app.post('/upload', upload.single('profileImage'), async (req, res) => {
+  if (!isS3Configured()) {
+    return sendError(res, 500, 'S3 uploads are not configured', {
+      code: 'S3_CONFIG_MISSING',
+      details: 'AWS_S3_BUCKET environment variable is required',
+    });
+  }
+
   if (!req.file || !req.file.buffer) {
     return sendError(res, 400, 'No image file provided', 'UPLOAD_FAILED');
   }

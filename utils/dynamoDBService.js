@@ -362,8 +362,11 @@ async function searchUsers(query, limit = 25) {
     TableName: TABLE_NAME,
     FilterExpression: filter,
     ExpressionAttributeValues: expressionValues,
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
     Limit: limit,
-    ProjectionExpression: 'userId, userName, email, gender, country, status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, createdAt, lastLogin, xp, itemType',
+    ProjectionExpression: 'userId, userName, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, createdAt, lastLogin, xp, itemType',
   }));
 
   return result.Items || [];
@@ -372,7 +375,10 @@ async function searchUsers(query, limit = 25) {
 async function clearExpiredStatuses(cutoffIso) {
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'itemType = :userType AND attribute_exists(status) AND status <> :empty AND statusUpdatedAt < :cutoff',
+    FilterExpression: 'itemType = :userType AND attribute_exists(#status) AND #status <> :empty AND statusUpdatedAt < :cutoff',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
     ExpressionAttributeValues: {
       ':userType': 'USER',
       ':empty': '',
@@ -430,12 +436,15 @@ async function getFriendRequestByRequestId(requestId) {
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
     FilterExpression: 'itemType = :friendType AND requestId = :requestId',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
     ExpressionAttributeValues: {
       ':friendType': 'FRIEND',
       ':requestId': requestId,
     },
     Limit: 1,
-    ProjectionExpression: 'PK, SK, userId, friendId, status, createdAt, updatedAt, requestId, friendIndexKey',
+    ProjectionExpression: 'PK, SK, userId, friendId, #status, createdAt, updatedAt, requestId, friendIndexKey',
   }));
   return result.Items && result.Items.length ? result.Items[0] : null;
 }
@@ -456,10 +465,10 @@ async function queryFriendRequestsBySender(userId) {
   const result = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk',
-    ExpressionAttributeValues: {
-      ':pk': `${FRIEND_PREFIX}${userId}`,
+    ExpressionAttributeNames: {
+      '#status': 'status',
     },
-    FilterExpression: 'status = :pending',
+    FilterExpression: '#status = :pending',
     ExpressionAttributeValues: {
       ':pk': `${FRIEND_PREFIX}${userId}`,
       ':pending': 'pending',
@@ -474,7 +483,10 @@ async function queryFriendRequestsByRecipient(userId) {
     TableName: TABLE_NAME,
     IndexName: 'FriendByFriendIdIndex',
     KeyConditionExpression: 'friendIndexKey = :friendIndexKey',
-    FilterExpression: 'status = :pending',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
+    FilterExpression: '#status = :pending',
     ExpressionAttributeValues: {
       ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
       ':pending': 'pending',
@@ -488,7 +500,10 @@ async function listFriendsForUser(userId) {
   const outgoing = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk',
-    FilterExpression: 'status = :accepted',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
+    FilterExpression: '#status = :accepted',
     ExpressionAttributeValues: {
       ':pk': `${FRIEND_PREFIX}${userId}`,
       ':accepted': 'accepted',
@@ -499,7 +514,10 @@ async function listFriendsForUser(userId) {
     TableName: TABLE_NAME,
     IndexName: 'FriendByFriendIdIndex',
     KeyConditionExpression: 'friendIndexKey = :friendIndexKey',
-    FilterExpression: 'status = :accepted',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
+    FilterExpression: '#status = :accepted',
     ExpressionAttributeValues: {
       ':friendIndexKey': `FRIEND_BY_FRIEND#${userId}`,
       ':accepted': 'accepted',

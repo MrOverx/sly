@@ -15,6 +15,10 @@ function ensureS3Config() {
   }
 }
 
+function isS3Configured() {
+  return Boolean(AWS_S3_BUCKET);
+}
+
 function sanitizeFileName(value) {
   if (!value || typeof value !== 'string') {
     return 'upload';
@@ -53,7 +57,7 @@ function getPublicUrl(key) {
 
 async function uploadProfileImageToS3(buffer, originalName, contentType) {
   if (!AWS_S3_BUCKET) {
-    throw new Error('Cannot upload to S3 because AWS_S3_BUCKET is not configured');
+    throw new Error('Cannot upload to S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable uploads.');
   }
 
   if (!Buffer.isBuffer(buffer)) {
@@ -80,4 +84,5 @@ async function uploadProfileImageToS3(buffer, originalName, contentType) {
 
 module.exports = {
   uploadProfileImageToS3,
+  isS3Configured,
 };
