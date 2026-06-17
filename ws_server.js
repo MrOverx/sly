@@ -139,11 +139,19 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Not an image! Please upload an image.'), false);
+    const acceptedImageExtensions = new Set([
+      '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif',
+    ]);
+    const originalName = String(file.originalname || '').toLowerCase();
+    const extension = path.extname(originalName);
+    const isImageMime = typeof file.mimetype === 'string' && file.mimetype.startsWith('image/');
+    const isImageExtension = acceptedImageExtensions.has(extension);
+
+    if (isImageMime || isImageExtension) {
+      return cb(null, true);
     }
+
+    cb(new Error('Not an image! Please upload an image.'), false);
   }
 });
 
@@ -1958,7 +1966,7 @@ function normalizeBooleanField(value) {
 }
 
 // ========== NEW: UPDATE USER PROFILE ENDPOINT ==========
-app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
+app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdate, async (req, res) => {
   if (!isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
@@ -2001,6 +2009,14 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
     if (!existingUser) {
       return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
     }
+
+    Logger.debug('user/update', 'Profile update payload', {
+      userId,
+      payloadKeys: Object.keys(req.body),
+      gender,
+      country,
+      hasProfileImageUrl,
+    });
 
     const updateData = {
       updatedAt: new Date(),
@@ -2145,9 +2161,19 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
       Logger.warn('user/update', 'Failed to broadcast profile_update', { userId, error: broadcastErr && broadcastErr.message });
     }
 
+    const profileCreated = (() => {
+      try {
+        const created = new Date(user.createdAt).getTime();
+        const updated = new Date(user.updatedAt).getTime();
+        return created === updated;
+      } catch (e) {
+        return false;
+      }
+    })();
+
     Logger.info('user/update', '✅ User profile updated or created', {
       userId,
-      created: user.createdAt.getTime() === user.updatedAt.getTime(),
+      created: profileCreated,
     });
 
     return sendSuccess(res, {

@@ -103,7 +103,17 @@ function validateProfileUpdate(req, res, next) {
     }
 
     // Validate optional fields
-    const { userName, gender, country, avatarColor } = req.body;
+    const {
+      userName,
+      gender,
+      country,
+      avatarColor,
+      status,
+      bio,
+      interests,
+      xp,
+      lastDailyXpAwardedAt,
+    } = req.body;
 
     if (userName && (userName.length < 2 || userName.length > 50)) {
       return sendError(res, 400, 'Username must be 2-50 characters', 'VALIDATION_ERROR');
@@ -113,6 +123,26 @@ function validateProfileUpdate(req, res, next) {
       return sendError(res, 400, 'Invalid gender value', 'VALIDATION_ERROR');
     }
 
+    if (status && status.length > 150) {
+      return sendError(res, 400, 'Status cannot exceed 150 characters', 'VALIDATION_ERROR');
+    }
+
+    if (bio && bio.length > 500) {
+      return sendError(res, 400, 'Bio cannot exceed 500 characters', 'VALIDATION_ERROR');
+    }
+
+    const sanitizedInterests = Array.isArray(interests)
+      ? interests
+          .map((item) => String(item).trim())
+          .filter((item) => item.length > 0)
+          .slice(0, 20)
+      : undefined;
+
+    const sanitizedXp = xp && typeof xp === 'object' && !Array.isArray(xp) ? xp : undefined;
+    const sanitizedLastDailyXpAwardedAt = lastDailyXpAwardedAt
+      ? String(lastDailyXpAwardedAt).trim()
+      : undefined;
+
     // Sanitize inputs
     req.body = {
       userId: String(userId).trim(),
@@ -120,6 +150,9 @@ function validateProfileUpdate(req, res, next) {
       gender: gender ? String(gender).toLowerCase() : undefined,
       country: country ? String(country).trim() : undefined,
       avatarColor: avatarColor ? String(avatarColor) : undefined,
+      status: status ? String(status).trim() : undefined,
+      bio: bio ? String(bio).trim() : undefined,
+      interests: sanitizedInterests,
       profileImageUrl: req.body.profileImageUrl ? String(req.body.profileImageUrl) : undefined,
       profileImagePath: req.body.profileImagePath ? String(req.body.profileImagePath) : undefined,
       pictureName: req.body.pictureName ? String(req.body.pictureName) : undefined,
@@ -127,9 +160,17 @@ function validateProfileUpdate(req, res, next) {
       email: req.body.email ? String(req.body.email).toLowerCase().trim() : undefined,
       authType: req.body.authType ? String(req.body.authType).trim() : undefined,
       isGuest: typeof req.body.isGuest === 'boolean' ? req.body.isGuest : undefined,
+      xp: sanitizedXp,
+      lastDailyXpAwardedAt: sanitizedLastDailyXpAwardedAt,
     };
 
-    Logger.debug('validation', 'Profile update validated');
+    Logger.debug('validation', 'Profile update validated', {
+      userId: req.body.userId,
+      hasStatus: !!status,
+      hasBio: !!bio,
+      hasInterests: Array.isArray(interests),
+      hasXp: !!xp,
+    });
     next();
   } catch (err) {
     Logger.error('validation/profile', 'Validation error', err.message);
