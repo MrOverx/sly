@@ -128,27 +128,15 @@ const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
+const { uploadProfileImageToS3 } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
 
-// Setup multer storage for profile uploads
-const uploadDir = path.join(__dirname, 'uploads', 'profiles');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'profile_' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+// Setup multer storage for profile uploads in memory so files can be uploaded directly to S3
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
-  storage: storage,
+  storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -280,24 +268,42 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 
-// Serve static files from the uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 // Profile image upload endpoint
-app.post('/upload', upload.single('profileImage'), (req, res) => {
-  if (!req.file) {
+app.post('/upload', upload.single('profileImage'), async (req, res) => {
+  if (!req.file || !req.file.buffer) {
     return sendError(res, 400, 'No image file provided', 'UPLOAD_FAILED');
   }
-  
-  // Create public URL for the uploaded file
-  // For local development, req.get('host') works. For production, you might need an env var.
-  const fileUrl = `${req.protocol}://${req.get('host')}/uploads/profiles/${req.file.filename}`;
-  
-  return sendSuccess(res, {
-    message: 'Image uploaded successfully',
-    url: fileUrl,
-    filename: req.file.filename
-  }, 'Image uploaded');
+
+  try {
+    Logger.info('upload', 'Uploading profile image to S3', {
+      filename: req.file.originalname || `profile-${Date.now()}`,
+      size: req.file.size,
+    });
+
+    const uploaded = await uploadProfileImageToS3(
+      req.file.buffer,
+      req.file.originalname || `profile-${Date.now()}`,
+      req.file.mimetype || 'application/octet-stream',
+    );
+
+    Logger.info('upload', 'Profile image uploaded successfully', {
+      key: uploaded.key,
+      url: uploaded.url,
+    });
+
+    return sendSuccess(res, {
+      data: {
+        url: uploaded.url,
+        key: uploaded.key,
+      },
+    }, 'Image uploaded successfully');
+  } catch (err) {
+    Logger.error('upload', 'Error uploading image to S3', err?.message || err);
+    return sendError(res, 500, 'Failed to upload image to S3', {
+      code: 'S3_UPLOAD_FAILED',
+      details: err?.message || String(err),
+    });
+  }
 });
 
 

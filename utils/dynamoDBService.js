@@ -24,6 +24,46 @@ const ddb = DynamoDBDocumentClient.from(client, {
   },
 });
 
+let TABLE_HASH_KEY = 'PK';
+let TABLE_RANGE_KEY = 'SK';
+let TABLE_HAS_SORT_KEY = true;
+let TABLE_SCHEMA_LOADED = false;
+let TABLE_SCHEMA_PROMISE = null;
+
+async function loadTableSchema() {
+  if (TABLE_SCHEMA_LOADED) return;
+  if (TABLE_SCHEMA_PROMISE) return TABLE_SCHEMA_PROMISE;
+
+  TABLE_SCHEMA_PROMISE = (async () => {
+    try {
+      const description = await describeTable();
+      const schema = description.Table.KeySchema || [];
+      const hashKey = schema.find(key => key.KeyType === 'HASH');
+      const rangeKey = schema.find(key => key.KeyType === 'RANGE');
+
+      if (hashKey) {
+        TABLE_HASH_KEY = hashKey.AttributeName;
+      }
+
+      if (!rangeKey) {
+        TABLE_HAS_SORT_KEY = false;
+        TABLE_RANGE_KEY = null;
+        console.info(`DynamoDB table ${TABLE_NAME} detected as HASH-only using key ${TABLE_HASH_KEY}`);
+      } else {
+        TABLE_RANGE_KEY = rangeKey.AttributeName;
+        TABLE_HAS_SORT_KEY = true;
+        console.info(`DynamoDB table ${TABLE_NAME} detected with HASH=${TABLE_HASH_KEY}, RANGE=${TABLE_RANGE_KEY}`);
+      }
+    } catch (error) {
+      console.warn(`Unable to infer DynamoDB key schema for ${TABLE_NAME}. Using PK/SK fallback.`, error?.message || error);
+    } finally {
+      TABLE_SCHEMA_LOADED = true;
+    }
+  })();
+
+  return TABLE_SCHEMA_PROMISE;
+}
+
 const USER_PREFIX = 'USER#';
 const FRIEND_PREFIX = 'FRIEND#';
 const BLOCK_PREFIX = 'BLOCK#';
@@ -37,7 +77,22 @@ function normalizeEmail(email) {
 }
 
 function buildItemKey(prefix, id, sk = METADATA_SK) {
-  return { PK: `${prefix}${id}`, SK: sk };
+  const key = {};
+  const hashValue = prefix === USER_PREFIX && TABLE_HASH_KEY === 'userId' ? id : `${prefix}${id}`;
+  key[TABLE_HASH_KEY] = hashValue;
+  if (TABLE_HAS_SORT_KEY) {
+    key[TABLE_RANGE_KEY] = sk;
+  }
+  return key;
+}
+
+function buildUserPrimaryKey(userId) {
+  const key = {};
+  key[TABLE_HASH_KEY] = userId;
+  if (TABLE_HAS_SORT_KEY) {
+    key[TABLE_RANGE_KEY] = METADATA_SK;
+  }
+  return key;
 }
 
 function toIso(value) {
@@ -172,8 +227,10 @@ async function isDbConnected() {
 
 async function getUserById(userId) {
   if (!userId) return null;
-  const result = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: buildItemKey(USER_PREFIX, userId) }));
-  return result.Item || null;
+  await loadTableSchema();
+  const key = TABLE_HAS_SORT_KEY ? buildUserPrimaryKey(userId) : { [TABLE_HASH_KEY]: userId };
+  const result = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
+  return normalizeDdbItem(result.Item || null);
 }
 
 async function getUserByEmail(email) {
@@ -203,11 +260,22 @@ async function getUserByEmail(email) {
   }
 }
 
+function normalizeDdbItem(item) {
+  if (!item) return item;
+  const normalized = { ...item };
+  if (!TABLE_HAS_SORT_KEY && item.userId && !item.PK) {
+    normalized.PK = item.userId;
+    normalized.SK = METADATA_SK;
+  }
+  return normalized;
+}
+
 async function upsertUser(userData) {
   if (!userData || !userData.userId) {
     throw new Error('User data must include userId');
   }
 
+  await loadTableSchema();
   const existing = await getUserById(userData.userId);
   let user = existing ? { ...existing, ...userData } : { ...userData };
 
@@ -227,6 +295,10 @@ async function upsertUser(userData) {
   }
 
   const item = buildUserItem(user);
+  if (!TABLE_HAS_SORT_KEY) {
+    delete item.SK;
+  }
+
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
@@ -236,6 +308,7 @@ async function createUser(userData) {
     throw new Error('User data must include userId');
   }
 
+  await loadTableSchema();
   const existingById = await getUserById(userData.userId);
   if (existingById) {
     throw new Error('USER_EXISTS');
@@ -249,6 +322,10 @@ async function createUser(userData) {
   }
 
   const item = buildUserItem(userData);
+  if (!TABLE_HAS_SORT_KEY) {
+    delete item.SK;
+  }
+
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
@@ -259,6 +336,9 @@ async function updateUserById(userId, updates) {
   const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
   if (updates.email) merged.emailLower = normalizeEmail(updates.email);
   const item = buildUserItem(merged);
+  if (!TABLE_HAS_SORT_KEY) {
+    delete item.SK;
+  }
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
