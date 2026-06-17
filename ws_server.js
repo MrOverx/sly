@@ -32,10 +32,43 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const socketIO = require('socket.io');
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const compression = require('compression');
 const helmet = require('helmet');
+const {
+  isDbConnected,
+  getUserById,
+  getUserByEmail,
+  upsertUser,
+  createUser,
+  updateUserById,
+  deleteUserById,
+  searchUsers,
+  clearExpiredStatuses,
+  getFriendRequest,
+  getFriendBetween,
+  createFriendRequest,
+  updateFriendRequestStatus,
+  deleteFriendRequest,
+  deleteFriendRelationship,
+  queryFriendRequestsBySender,
+  queryFriendRequestsByRecipient,
+  listFriendsForUser,
+  countFriendsForUser,
+  getUsersByIds,
+  getActiveBlock,
+  putBlockedUser,
+  deleteBlock,
+  getReportsForUser,
+  getReport,
+  createReport,
+  deleteFriendRelationsForUser,
+  deleteBlocksForUser,
+  deleteReportsForUserAndReporter,
+  getUserStats,
+} = require('./utils/dynamoDBService');
+
+const isDatabaseConnected = isDbConnected;
 
 async function fetchGoogleTokenInfo(idToken) {
   return new Promise((resolve, reject) => {
@@ -93,10 +126,39 @@ const { Logger } = require('./utils/logger');
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
-const { mongoDBManager } = require('./utils/mongoDBManager');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
 const cors = require('cors');
+const multer = require('multer');
+
+// Setup multer storage for profile uploads
+const uploadDir = path.join(__dirname, 'uploads', 'profiles');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile_' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not an image! Please upload an image.'), false);
+    }
+  }
+});
+
 
 // ✅ Import enhancement middleware
 const { validateAuth, validateRegistration, validateProfileUpdate } = require('./middleware/validation');
@@ -218,6 +280,27 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 
+// Serve static files from the uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Profile image upload endpoint
+app.post('/upload', upload.single('profileImage'), (req, res) => {
+  if (!req.file) {
+    return sendError(res, 400, 'No image file provided', 'UPLOAD_FAILED');
+  }
+  
+  // Create public URL for the uploaded file
+  // For local development, req.get('host') works. For production, you might need an env var.
+  const fileUrl = `${req.protocol}://${req.get('host')}/uploads/profiles/${req.file.filename}`;
+  
+  return sendSuccess(res, {
+    message: 'Image uploaded successfully',
+    url: fileUrl,
+    filename: req.file.filename
+  }, 'Image uploaded');
+});
+
+
 // ✅ Register global middleware (BEFORE routes)
 app.use(globalRateLimit);
 
@@ -226,12 +309,10 @@ app.get('/health', health.handleHealthCheck);
 
 // ✅ Register database health check
 health.registerService('database', async () => {
-  try {
-    await mongoose.connection.db.admin().ping();
-    return { status: 'healthy', message: 'MongoDB connected' };
-  } catch (err) {
-    return { status: 'unhealthy', message: err.message };
-  }
+  const connected = await isDbConnected();
+  return connected
+    ? { status: 'healthy', message: 'DynamoDB accessible' }
+    : { status: 'unhealthy', message: 'Unable to connect to DynamoDB' };
 });
 
 // ✅ Start health monitoring
@@ -241,45 +322,16 @@ health.startMonitoring(60);
 startCleanupInterval();
 startOtpCleanup();
 
-// ========== MONGODB CONNECTION CONSTANTS ==========
-// 🔐 MongoDB Atlas Connection String (from environment variable)
-// Format: mongodb+srv://username:password@cluster.mongodb.net/databaseName?options
-const MONGODB_URI = process.env.MONGODB_URI;
+// ========== DYNAMODB CONFIGURATION VALIDATION ==========
+const DYNAMODB_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || process.env.DYNAMODB_REGION;
+const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || process.env.AWS_DYNAMODB_TABLE || 'oververseDB';
 
-if (!MONGODB_URI) {
-  console.error('❌ MONGODB_URI is not configured. Set it in .env or environment variables.');
+if (!DYNAMODB_REGION || !DYNAMODB_TABLE) {
+  console.error('❌ AWS_REGION and DYNAMODB_TABLE must be configured in the environment.');
   process.exit(1);
 }
 
-const dbNameMatch = MONGODB_URI.match(/^[^?]*\/([^?\/]+)(\?|$)/);
-const configuredDb = dbNameMatch ? dbNameMatch[1] : null;
-if (!configuredDb) {
-  console.error('❌ MongoDB URI does not include a database name. This backend requires a target database.');
-
-  process.exit(1);
-}
-if (configuredDb !== 'lolcluster') {
-  console.warn(`⚠️ MongoDB URI uses database '${configuredDb}'. Confirm this is the intended target.`);
-}
-
-Logger.info('mongodb', `🔐 MongoDB URI targeting database: ${configuredDb}`);
-
-const MONGODB_CONFIG = {
-  URI: MONGODB_URI,
-  options: {
-    maxPoolSize: 10,
-    minPoolSize: 2,
-    socketTimeoutMS: 45000,
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 10000,
-    maxIdleTimeMS: 300000,
-    bufferCommands: false,
-    autoIndex: false,
-    retryWrites: true,
-    retryReads: true,
-    writeConcern: { w: 'majority' },
-  },
-};
+Logger.info('dynamodb', `🔐 DynamoDB region: ${DYNAMODB_REGION}, table: ${DYNAMODB_TABLE}`);
 
 // ========== CONFIGURATION ==========
 const CONFIG = {
@@ -314,7 +366,6 @@ const CONFIG = {
   },
 };
 
-const isDatabaseConnected = () => mongoose.connection.readyState === 1;
 let serverStarted = false;
 let isGracefulShutdown = false;
 
@@ -363,56 +414,8 @@ function startServer() {
   });
 }
 
-// ========== MONGODB CONNECTION ==========
-const safeMongoUri = MONGODB_CONFIG.URI.replace(/^(mongodb(?:\+srv)?:\/\/)([^@]+@)?/, '$1****@');
-Logger.info('mongodb', '🔄 Connecting to MongoDB...');
-Logger.info('mongodb', `📍 MongoDB Host: ${safeMongoUri}`);
-
-// ✅ START SERVER IMMEDIATELY (don't wait for MongoDB)
-// This allows Cloud Run health check to pass while MongoDB connects in the background
+// Start server immediately; DynamoDB is accessible via AWS SDK configuration.
 startServer();
-
-// ✅ IMPROVED: Use MongoDB Manager with exponential backoff retry
-Logger.info('mongodb', '🔄 Initializing MongoDB connection manager', {
-  uri: safeMongoUri,
-});
-
-(async () => {
-  let connected = await mongoDBManager.connect(MONGODB_CONFIG.URI, MONGODB_CONFIG.options);
-
-  if (!connected) {
-    // Attempt to reconnect with exponential backoff
-    const reconnectLoop = async () => {
-      if (!mongoDBManager.getConnectionStatus()) {
-        connected = await mongoDBManager.reconnect(MONGODB_CONFIG.URI, MONGODB_CONFIG.options);
-      }
-    };
-
-    // Attempt reconnection every 5 seconds if not connected
-    const reconnectInterval = setInterval(async () => {
-      if (mongoDBManager.getConnectionStatus()) {
-        clearInterval(reconnectInterval);
-        health.setDbConnected(true);
-        Logger.info('mongodb', '✅ Database reconnected successfully');
-      } else {
-        await reconnectLoop();
-      }
-    }, 5000);
-  } else {
-    health.setDbConnected(true);
-  }
-})();
-
-// Handle MongoDB connection events
-mongoose.connection.on('disconnected', () => {
-  Logger.warn('mongodb', '⚠️ Disconnected from MongoDB');
-  health.setDbConnected(false);
-});
-
-mongoose.connection.on('error', (err) => {
-  Logger.error('mongodb', '❌ MongoDB error', err.message);
-  health.setDbConnected(false);
-});
 
 
 // ✅ OPTIMIZED: Socket.IO Configuration for deployment compatibility
@@ -462,54 +465,6 @@ io.engine.on('connection_error', (err) => {
   });
 });
 
-// ========== MONGODB SCHEMAS ==========
-
-// User Schema
-const userSchema = new mongoose.Schema({
-  userId: { type: String, unique: true, required: true, index: true },
-  userName: { type: String, required: true, index: true },
-  email: { type: String, unique: true, sparse: true, index: true, lowercase: true },
-  authType: { type: String, enum: ['GOOGLE_OAUTH', 'LOCAL', 'GUEST'], default: 'LOCAL', index: true },
-  isGuest: { type: Boolean, default: false, index: true },
-  
-  // Profile Information
-  gender: { type: String, enum: ['male', 'female', 'other'], default: 'other' },
-  country: { type: String, default: null, index: true },
-  status: { type: String, default: null },
-  bio: { type: String, default: null, maxlength: 500 },
-  interests: { type: [String], default: [] },
-  birthDate: { type: Date, default: null },
-  profileComplete: { type: Boolean, default: false, index: true }, // ✅ Track if user completed profile setup
-  
-  // Avatar & Profile
-  avatarColor: { type: String, default: '#128C7E' },
-  avatarLetter: { type: String, default: 'U' },
-  profileImageUrl: { type: String, default: null },
-  passwordHash: { type: String, default: null },
-  useColorProfile: { type: Boolean, default: true },
-  pictureName: { type: String, default: null },
-  emailVerified: { type: Boolean, default: false, index: true },
-  emailVerifiedAt: { type: Date, default: null },
-  expiresAt: { type: Date, default: null, index: true },
-
-  // Stats & achievements
-  xp: { type: Map, of: Number, default: {} },
-  lastDailyXpAwardedAt: { type: Date, default: null },
-  
-  // Account Status
-  isActive: { type: Boolean, default: true, index: true },
-  createdAt: { type: Date, default: Date.now, index: true },
-  updatedAt: { type: Date, default: Date.now, index: true },
-  lastLogin: { type: Date, default: null, index: true },
-});
-
-// ✅ Create compound indexes for common query patterns
-userSchema.index({ isActive: 1, createdAt: -1 }); // Get active users by creation date
-userSchema.index({ country: 1, isActive: 1 }); // Find users by country
-userSchema.index({ authType: 1, isActive: 1 }); // Auth type filtering
-userSchema.index({ email: 1, isGuest: 1 }); // Email lookups
-userSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true }); // Guest account TTL cleanup
-
 // ✅ Helper function to normalize xp output (handles legacy starCount fallback)
 function getUserXp(user) {
   if (!user) return {};
@@ -521,49 +476,6 @@ function getUserXp(user) {
   }
   return {};
 }
-
-// Blocked Users Schema (tracks blocks and time-based unblocks)
-const blockedUserSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
-  blockedByUserId: { type: String, required: true, index: true },
-  reason: { type: String, default: 'User reported' },
-  blockType: { type: String, enum: ['report', 'manual'], default: 'report' },
-  blockDuration: { type: Number, default: null },
-  blockedUntil: { type: Date, default: null, index: true }, // TTL cleanup query
-  reportCount: { type: Number, default: 1 },
-  reporters: { type: [String], default: [] },
-  createdAt: { type: Date, default: Date.now },
-});
-
-// ✅ Compound index for block lookups
-blockedUserSchema.index({ userId: 1, blockedByUserId: 1 }, { unique: true });
-blockedUserSchema.index({ blockedUntil: 1 }, { sparse: true }); // Sparse index for TTL
-
-// Report History Schema (tracks all reports against a user)
-const reportSchema = new mongoose.Schema({
-  reportedUserId: { type: String, required: true, index: true },
-  reporterId: { type: String, required: true },
-  reason: { type: String, default: 'User reported' },
-  createdAt: { type: Date, default: Date.now, expires: 86400 }, // Auto-delete after 24 hours
-});
-
-// ✅ NEW: Friends Schema (tracks friend relationships)
-const friendSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
-  friendId: { type: String, required: true, index: true },
-  status: { type: String, enum: ['pending', 'accepted'], default: 'accepted' },
-  createdAt: { type: Date, default: Date.now, index: true },
-});
-
-// Compound index for friend lookups
-friendSchema.index({ userId: 1, friendId: 1 }, { unique: true });
-friendSchema.index({ friendId: 1, userId: 1 });
-
-// Create Models
-const User = mongoose.model('User', userSchema);
-const BlockedUser = mongoose.model('BlockedUser', blockedUserSchema);
-const Report = mongoose.model('Report', reportSchema);
-const Friend = mongoose.model('Friend', friendSchema);
 
 // ✅ IN-MEMORY VOICE SPACES (Temporary, Volatile - Not Persistent)
 // Format: spaceId -> { spaceId, spaceName, description, hostId, hostName, hostAvatar, hostAvatarColor, hostProfileImageUrl, isPrivate, speakerLimit, participants: [], createdAt, status }
@@ -628,6 +540,19 @@ function emitSpaceUpdated(space) {
   }
 }
 
+// Periodic task to clean up old statuses
+setInterval(async () => {
+  try {
+    const expirationDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await clearExpiredStatuses(expirationDate.toISOString());
+  if (result > 0) {
+    Logger.info('status_cleanup', `Cleared status for ${result} users`);
+  }
+  } catch (err) {
+    Logger.error('status_cleanup', 'Failed to clean up expired statuses', err.message);
+  }
+}, 15 * 60 * 1000); // Check every 15 minutes
+
 // Helper to add timeout to async operations (prevents hanging requests)
 function withTimeout(promise, timeoutMs = 5000) {
   return Promise.race([
@@ -646,8 +571,9 @@ async function resolveUserProfileMetadata(userId, userMeta = {}, fallbackName = 
   const userName = freshProfile?.userName || userMeta.userName || fallbackName;
   const avatarLetter = freshProfile?.userName ? freshProfile.userName.charAt(0).toUpperCase() : (userMeta.avatarLetter || defaultInitial);
   const avatarColor = freshProfile?.avatarColor || userMeta.avatarColor || defaultColor;
-  const profileImageUrl = freshProfile?.profileImageUrl || userMeta.profileImagePath || null;
-  return { userName, avatarLetter, avatarColor, profileImageUrl };
+  const profileImageUrl = freshProfile?.profileImageUrl || userMeta.profileImageUrl || userMeta.profileImagePath || null;
+  const profileImagePath = freshProfile?.profileImageUrl || userMeta.profileImagePath || userMeta.profileImageUrl || null;
+  return { userName, avatarLetter, avatarColor, profileImageUrl, profileImagePath };
 }
 
 function buildParticipant(userId, meta, role) {
@@ -657,7 +583,8 @@ function buildParticipant(userId, meta, role) {
     role,
     avatarColor: meta.avatarColor,
     avatarLetter: meta.avatarLetter,
-    profileImageUrl: meta.profileImageUrl,
+    profileImageUrl: meta.profileImageUrl || meta.profileImagePath || null,
+    profileImagePath: meta.profileImagePath || meta.profileImageUrl || null,
     joinedAt: Date.now(),
   };
 }
@@ -875,7 +802,7 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
       emailVerified: tokenData.email_verified,
     });
 
-    // ✅ Save or update user in MongoDB after Google validation
+    // ✅ Save or update user in DynamoDB after Google validation
     const userId = tokenData.sub;
     Logger.info('oauth/validate', '🔍 Token data sub', { sub: tokenData.sub, type: typeof tokenData.sub });
     const userParams = {
@@ -893,30 +820,27 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
     let isExistingUser = false;
 
     try {
-      // ✅ STEP 1: Check if email ALREADY EXISTS before upserting
-      // This is the PRIMARY way to determine if user is returning or new
       let fullExistingUser = null;
       const userEmail = userParams.email?.toLowerCase();
-      
+
       if (userEmail) {
-        fullExistingUser = await User.findOne({ email: userEmail }).lean();
+        fullExistingUser = await getUserByEmail(userEmail);
         if (fullExistingUser) {
-          Logger.info('oauth/validate', '✅ Existing user found by email', { 
+          Logger.info('oauth/validate', '✅ Existing user found by email', {
             userId: fullExistingUser.userId,
             email: userEmail,
-            profileComplete: fullExistingUser.profileComplete
+            profileComplete: fullExistingUser.profileComplete,
           });
         }
       }
 
-      // If no email match, check by userId as fallback
       if (!fullExistingUser && userId) {
-        fullExistingUser = await User.findOne({ userId }).lean();
+        fullExistingUser = await getUserById(userId);
         if (fullExistingUser) {
-          Logger.info('oauth/validate', '✅ Existing user found by userId', { 
+          Logger.info('oauth/validate', '✅ Existing user found by userId', {
             userId,
             email: fullExistingUser.email,
-            profileComplete: fullExistingUser.profileComplete
+            profileComplete: fullExistingUser.profileComplete,
           });
         }
       }
@@ -931,41 +855,31 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
         updatedAt: userParams.updatedAt,
       };
 
-      Logger.debug('oauth/validate', '🔄 Upserting user to MongoDB', { userId });
+      Logger.debug('oauth/validate', '🔄 Upserting user to DynamoDB', { userId });
 
-      // ✅ STEP 2: Update or create the user
-      savedUser = await User.findOneAndUpdate(
-        { userId },
-        {
-          $set: updateData,
-          $setOnInsert: {
-            userId,
-            gender: 'other',
-            country: null,
-            avatarColor: '#128C7E',
-            profileComplete: false, // Default to false for new users
-            createdAt: new Date(),
-          },
-        },
-        { upsert: true, new: true, lean: true, setDefaultsOnInsert: true }
-      );
+      savedUser = await upsertUser({
+        userId,
+        ...updateData,
+        gender: 'other',
+        country: null,
+        avatarColor: '#128C7E',
+        profileComplete: false,
+        createdAt: new Date(),
+      });
 
       Logger.info('oauth/validate', '✅ User upserted successfully', { userId });
 
-      // ✅ STEP 3: Determine if user is existing
-      // Source of truth: Was user in database BEFORE this upsert?
       isExistingUser = fullExistingUser !== null;
-      
+
       Logger.info('oauth/validate', '📊 User Status', {
         userId,
         email: userEmail,
         isExistingUser,
         profileComplete: savedUser?.profileComplete || false,
         hasGender: !!savedUser?.gender,
-        hasCountry: !!savedUser?.country
+        hasCountry: !!savedUser?.country,
       });
 
-      // ✅ Return complete user profile with all required fields
       const userResponse = {
         userId: savedUser.userId,
         userName: savedUser.userName,
@@ -991,9 +905,9 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
         isExistingUser,
         user: userResponse,
       }, `Token validated - ${isExistingUser ? 'Existing' : 'New'} user`);
-    } catch (mongoErr) {
-      Logger.error('oauth/validate', 'Error upserting user to MongoDB', mongoErr?.message);
-      return sendError(res, 500, 'Database error', { details: mongoErr?.message });
+    } catch (dbErr) {
+      Logger.error('oauth/validate', 'Error upserting user to DynamoDB', dbErr?.message);
+      return sendError(res, 500, 'Database error', { details: dbErr?.message });
     }
   } catch (err) {
     Logger.error('oauth/validate', 'Error validating token', err && err.message);
@@ -1030,16 +944,16 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
       ? String(requestedUserId).trim()
       : `local_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-    // Check if user already exists by email or generated userId
-    const existingUser = await User.findOne({ $or: [{ userId: newUserId }, { email: normalizedEmail }] }).lean();
-    if (existingUser) {
+    const existingUserById = await getUserById(newUserId);
+    const existingUserByEmail = await getUserByEmail(normalizedEmail);
+    if (existingUserById || existingUserByEmail) {
       return sendError(res, 409, 'User already exists', 'USER_EXISTS');
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const birthDateValue = birthDate ? new Date(String(birthDate)) : null;
 
-    const newUser = new User({
+    const savedUser = await createUser({
       userId: newUserId,
       userName: String(userName).trim(),
       email: normalizedEmail,
@@ -1061,23 +975,27 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
       lastLogin: new Date(),
     });
 
-    await newUser.save();
-
     Logger.info('auth/register', '✅ New user registered', { userId: newUserId, email: normalizedEmail });
 
     return sendSuccess(res, {
       user: {
-        userId: newUser.userId,
-        userName: newUser.userName,
-        email: newUser.email,
-        authType: newUser.authType,
-        isGuest: newUser.isGuest,
-        avatarColor: newUser.avatarColor,
-        gender: newUser.gender,
-        country: newUser.country,
-        status: newUser.status,
-        bio: newUser.bio,
-        interests: newUser.interests,
+        userId: savedUser.userId,
+        userName: savedUser.userName,
+        email: savedUser.email,
+        authType: savedUser.authType,
+        isGuest: savedUser.isGuest,
+        avatarColor: savedUser.avatarColor,
+        gender: savedUser.gender,
+        country: savedUser.country,
+        status: savedUser.status,
+        bio: savedUser.bio,
+        interests: savedUser.interests,
+        profileImageUrl: savedUser.profileImageUrl,
+        pictureName: savedUser.pictureName || null,
+        profileComplete: savedUser.profileComplete,
+        xp: getUserXp(savedUser),
+        lastLogin: savedUser.lastLogin,
+        createdAt: savedUser.createdAt,
       },
     }, 'User registered successfully');
   } catch (err) {
@@ -1110,13 +1028,17 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
 
     const lookup = { $or: [] };
     if (userId) lookup.$or.push({ userId: String(userId).trim() });
-    if (normalizedEmail) lookup.$or.push({ email: normalizedEmail });
+    if (normalizedEmail) {
+      lookup.$or.push({ 
+        email: { $regex: `^${normalizedEmail.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`, $options: 'i' } 
+      });
+    }
 
     if (lookup.$or.length === 0) {
       return sendError(res, 400, 'userId or email is required');
     }
 
-    const user = await User.findOne(lookup).lean();
+    const user = await findUserByLookup(lookup);
 
     if (!user) {
       return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
@@ -1131,9 +1053,10 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
       return sendError(res, 401, 'Invalid email or password', 'INVALID_CREDENTIALS');
     }
 
-    await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
+    const updatedUser = await updateUserById(user.userId, { lastLogin: new Date() });
+    const currentUser = updatedUser || user;
 
-    Logger.info('auth/login', '✅ User logged in', { userId: user.userId, email: user.email });
+    Logger.info('auth/login', '✅ User logged in', { userId: currentUser.userId, email: currentUser.email });
 
     return sendSuccess(res, {
       user: {
@@ -1149,9 +1072,10 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
         interests: Array.isArray(user.interests) ? user.interests : [],
         avatarColor: user.avatarColor,
         profileImageUrl: user.profileImageUrl,
-        xp: getUserXp(user),
         profileComplete: user.profileComplete || false,
+        xp: getUserXp(user),
         lastLogin: user.lastLogin,
+        createdAt: user.createdAt,
       },
     }, 'Login successful');
   } catch (err) {
@@ -1260,8 +1184,7 @@ app.post('/auth/forgot-password', forgotPasswordLimiter, asyncHandler(async (req
   }
 
   const normalizedEmail = String(email).toLowerCase().trim();
-  const user = await User.findOne({ email: normalizedEmail }).lean();
-
+  const user = await getUserByEmail(normalizedEmail);
   if (!user) {
     Logger.info('auth/forgot-password', 'Password reset request for unknown email', { email: normalizedEmail });
   }
@@ -1305,18 +1228,18 @@ app.post('/auth/reset-password', resetPasswordLimiter, asyncHandler(async (req, 
     return sendError(res, 400, message, reason);
   }
 
-  const user = await User.findOne({ email: normalizedEmail });
+  const user = await getUserByEmail(normalizedEmail);
   if (!user) {
     return sendError(res, 404, 'Email is not registered', 'USER_NOT_FOUND');
   }
 
   try {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.passwordHash = hashedPassword;
-    user.emailVerified = true;
-    user.emailVerifiedAt = new Date();
-    user.updatedAt = new Date();
-    await user.save();
+    await updateUserById(user.userId, {
+      passwordHash: hashedPassword,
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
+    });
 
     Logger.info('auth/reset-password', 'Password reset successfully', { email: normalizedEmail, userId: user.userId });
     return sendSuccess(res, { email: normalizedEmail }, 'Password reset successfully');
@@ -1344,9 +1267,7 @@ app.get('/auth/check-email', asyncHandler(async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
 
     // Query for user with this email (case-insensitive)
-    const existingUser = await User.findOne({
-      email: { $regex: `^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
-    });
+    const existingUser = await getUserByEmail(normalizedEmail);
 
     if (existingUser) {
       // ✅ EMAIL EXISTS - Return user profile for direct home navigation
@@ -1401,7 +1322,7 @@ app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
     const guestName = `Guest${Math.floor(Math.random() * 9000) + 1000}`;
 
     // ✅ Create guest user (auto-expire after 24 hours)
-    const guestUser = new User({
+    const guestUser = await createUser({
       userId: guestId,
       userName: guestName,
       email: null,
@@ -1412,11 +1333,9 @@ app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
       avatarColor: '#6200EE',
       profileImageUrl: null,
       lastLogin: new Date(),
-      // TTL cleanup: Guest accounts expire after 24 hours
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      profileComplete: false,
     });
-
-    await guestUser.save();
 
     Logger.info('auth/guest-login', '✅ Guest account created', { userId: guestId, deviceId });
 
@@ -1443,9 +1362,9 @@ app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
 }));
 
 // ========== PERFORMANCE: SYSTEM STATS ENDPOINT ==========
-app.get('/stats/system', (req, res) => {
+app.get('/stats/system', async (req, res) => {
   const cacheStats = userCache.getStats();
-  const dbStats = mongoDBManager.getStats();
+  const dbStats = await getUserStats();
   
   return sendSuccess(res, {
     cache: cacheStats,
@@ -1478,23 +1397,16 @@ async function handleGetUserProfile(req, res) {
     let user = userCache.get(userId);
 
     if (!user) {
-      // ✅ Optimize query with .lean() for read-only operations
-      user = await User.findOne({ userId }).lean().exec();
+      user = await getUserById(userId);
 
       if (!user) {
         return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
       }
 
-      // ✅ Cache the result for future requests
       userCache.set(userId, user);
     }
 
-    const friendCount = await Friend.countDocuments({
-      $or: [
-        { userId },
-        { friendId: userId, status: 'accepted' },
-      ],
-    });
+    const friendCount = await countFriendsForUser(userId);
 
     return sendSuccess(res, {
       user: {
@@ -1558,23 +1470,7 @@ app.get('/users/search', async (req, res) => {
     }
 
     // ✅ FIXED: Create case-insensitive regex for fuzzy search
-    const escaped = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const fuzzyRegex = new RegExp(escaped, 'i');
-
-    // ✅ IMPROVED: Search without isActive filter for better results
-    // Include users even if isActive is not set or false (for compatibility with old data)
-    const users = await User.find({
-      $or: [
-        { userName: fuzzyRegex },
-        { userId: fuzzyRegex },
-        { email: fuzzyRegex },
-      ],
-    })
-      .select('userId userName email gender country status bio interests avatarColor avatarLetter profileImageUrl profileImagePath createdAt lastLogin xp')
-      .sort({ createdAt: -1 })
-      .limit(25)
-      .lean()
-      .exec();
+    const users = await searchUsers(searchText);
 
     Logger.info('users/search', `Search results: ${users.length} users found`, {
       query: searchText,
@@ -1583,7 +1479,7 @@ app.get('/users/search', async (req, res) => {
 
     // ✅ PERFORMANCE: Cache results for repeated queries
     users.forEach(user => {
-      userCache.set(user.userId, user);
+      if (user.userId) userCache.set(user.userId, user);
     });
 
     // ✅ ENHANCED: Return all fields frontend needs
@@ -1630,7 +1526,7 @@ app.post('/friends/add', async (req, res) => {
     // ✅ OPTIMIZED: Check if friend exists with cache or single query
     let friendUser = userCache.get(friendId);
     if (!friendUser) {
-      friendUser = await User.findOne({ userId: friendId, isActive: true }).lean().exec();
+      friendUser = await getUserById(friendId);
       if (friendUser) userCache.set(friendId, friendUser);
     }
     
@@ -1640,7 +1536,7 @@ app.post('/friends/add', async (req, res) => {
 
     let senderUser = userCache.get(userId);
     if (!senderUser) {
-      senderUser = await User.findOne({ userId }).lean().exec();
+      senderUser = await getUserById(userId);
       if (senderUser) userCache.set(userId, senderUser);
     }
 
@@ -1649,31 +1545,19 @@ app.post('/friends/add', async (req, res) => {
     }
 
     // Check if already friends or pending request
-    const existingRequest = await Friend.findOne({
-      $or: [
-        { userId: userId, friendId: friendId },
-        { userId: friendId, friendId: userId },
-      ],
-    }).lean().exec();
+    const existingRequest = await getFriendBetween(userId, friendId);
 
     if (existingRequest) {
       return sendError(res, 400, 'Already friends or request pending');
     }
 
-    // Create pending friend request
-    const friendRequest = new Friend({
-      userId: userId,
-      friendId: friendId,
-      status: 'pending',
-    });
-
-    await friendRequest.save();
+    const friendRequest = await createFriendRequest(userId, friendId);
 
     Logger.info('friends/add', 'Friend request sent', { userId, friendId });
 
     // ✅ OPTIMIZED: Get sender user for notification from cache
     if (!senderUser) {
-      senderUser = await User.findOne({ userId: userId }).lean().exec();
+      senderUser = await getUserById(userId);
       if (senderUser) userCache.set(userId, senderUser);
     }
 
@@ -1681,7 +1565,7 @@ app.post('/friends/add', async (req, res) => {
     const recipientSocketId = userSockets.get(friendId);
     if (recipientSocketId && senderUser) {
       io.to(recipientSocketId).emit('friend_request', {
-        requestId: friendRequest._id,
+        requestId: friendRequest.requestId,
         fromUserId: userId,
         fromUserName: senderUser.userName || 'Unknown',
         fromUserAvatar: senderUser.avatarColor || '#128C7F',
@@ -1718,7 +1602,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     }
 
     // Find the friend request
-    const friendRequest = await Friend.findById(requestId).lean().exec();
+    const friendRequest = await getFriendRequestByRequestId(requestId);
     if (!friendRequest) {
       return sendError(res, 404, 'Friend request not found');
     }
@@ -1729,11 +1613,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     }
 
     // ✅ OPTIMIZED: Update request status
-    const updatedRequest = await Friend.findByIdAndUpdate(
-      requestId,
-      { status: 'accepted', updatedAt: new Date() },
-      { new: true, lean: true }
-    ).exec();
+    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'accepted');
 
     // ✅ Invalidate cache for both users since friend lists changed
     userCache.invalidate(userId);
@@ -1744,7 +1624,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     // ✅ OPTIMIZED: Get recipient data from cache
     let recipientUser = userCache.get(userId);
     if (!recipientUser) {
-      recipientUser = await User.findOne({ userId: userId }).lean().exec();
+      recipientUser = await getUserById(userId);
       if (recipientUser) userCache.set(userId, recipientUser);
     }
 
@@ -1752,7 +1632,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     const senderSocketId = userSockets.get(friendRequest.userId);
     if (senderSocketId && recipientUser) {
       io.to(senderSocketId).emit('friend_request_accepted', {
-        requestId: updatedRequest._id,
+        requestId: friendRequest.requestId,
         userIdAccepted: userId,
         userName: recipientUser.userName || 'Unknown',
       });
@@ -1783,16 +1663,17 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
       return sendError(res, 400, 'userId and requestId are required');
     }
 
-    // Find and delete the friend request
-    const friendRequest = await Friend.findByIdAndDelete(requestId);
+    // Find the friend request by requestId
+    const friendRequest = await getFriendRequestByRequestId(requestId);
     if (!friendRequest) {
       return sendError(res, 404, 'Friend request not found');
     }
 
-    // Verify this user is the recipient
     if (normalizeId(friendRequest.friendId) !== userId) {
       return sendError(res, 403, 'Not authorized to deny this request');
     }
+
+    await deleteFriendRequest(friendRequest.userId, friendRequest.friendId);
 
     Logger.info('friends/request/deny', 'Friend request denied', { userId, requestId });
 
@@ -1826,15 +1707,9 @@ app.post('/friends/remove', async (req, res) => {
       return sendError(res, 400, 'Cannot remove yourself as a friend');
     }
 
-    const deleted = await Friend.findOneAndDelete({
-      $or: [
-        { userId: userId, friendId: friendId },
-        { userId: friendId, friendId: userId },
-      ],
-      status: 'accepted',
-    });
+    const deletedCount = await deleteFriendRelationship(userId, friendId);
 
-    if (!deleted) {
+    if (!deletedCount) {
       return sendError(res, 404, 'Friend relationship not found');
     }
 
@@ -1868,26 +1743,17 @@ app.get('/friends/list', async (req, res) => {
     }
 
     // Get all friends
-    const friends = await Friend.find({
-      $or: [
-        { userId: userId },
-        { friendId: userId },
-      ],
-      status: 'accepted',
-    }).lean();
+    const friends = await listFriendsForUser(userId);
 
     // Get friend user details with all profile fields
-    const friendIds = friends.map((f) => normalizeId(f.userId === userId ? f.friendId : f.userId));
+    const friendIds = friends.map((id) => normalizeId(id));
     const cachedUsers = userCache.batchGet(friendIds);
     const missingFriendIds = friendIds.filter((id) => !cachedUsers.get(id));
 
     let cachedFriendUsers = Array.from(cachedUsers.values()).filter(Boolean);
     let freshFriendUsers = [];
     if (missingFriendIds.length > 0) {
-      freshFriendUsers = await User.find(
-        { userId: { $in: missingFriendIds }, isActive: true },
-        'userId userName avatarColor avatarLetter profileImageUrl gender country'
-      ).lean().exec();
+      freshFriendUsers = await getUsersByIds(missingFriendIds);
       freshFriendUsers.forEach((u) => userCache.set(normalizeId(u.userId), u));
     }
 
@@ -1942,17 +1808,11 @@ app.get('/friends/requests/incoming', async (req, res) => {
     }
 
     // Get all incoming friend requests (where user is the recipient)
-    const incomingRequests = await Friend.find({
-      friendId: userId,
-      status: 'pending',
-    }).lean();
+    const incomingRequests = await queryFriendRequestsByRecipient(userId);
 
     // Get sender user details
     const senderIds = incomingRequests.map((r) => r.userId);
-    const senderUsers = await User.find(
-      { userId: { $in: senderIds }, isActive: true },
-      'userId userName avatarColor avatarLetter profileImageUrl gender country'
-    ).lean();
+    const senderUsers = await getUsersByIds(senderIds);
 
     // Map requests to include sender details
     const requestsList = incomingRequests.map((request) => {
@@ -1999,17 +1859,11 @@ app.get('/friends/requests/outgoing', async (req, res) => {
     }
 
     // Get all outgoing friend requests (where user is the sender)
-    const outgoingRequests = await Friend.find({
-      userId: userId,
-      status: 'pending',
-    }).lean();
+    const outgoingRequests = await queryFriendRequestsBySender(userId);
 
     // Get recipient user details
     const recipientIds = outgoingRequests.map((r) => r.friendId);
-    const recipientUsers = await User.find(
-      { userId: { $in: recipientIds }, isActive: true },
-      'userId userName avatarColor avatarLetter profileImageUrl gender country'
-    ).lean();
+    const recipientUsers = await getUsersByIds(recipientIds);
 
     // Map requests to include recipient details
     const requestsList = outgoingRequests.map((request) => {
@@ -2137,6 +1991,11 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
       hasInterests,
     });
 
+    const existingUser = await getUserById(userId);
+    if (!existingUser) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
     const updateData = {
       updatedAt: new Date(),
     };
@@ -2155,11 +2014,13 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
     if (normalizedCountry) updateData.country = normalizedCountry;
 
     if (hasStatus) {
-      updateData.status = normalizeStringInput(status, 150);
+      const newStatus = normalizeStringInput(status, 150);
+      updateData.status = newStatus;
+      if (existingUser.status !== newStatus) {
+        updateData.statusUpdatedAt = new Date();
+      }
     }
 
-    // Bio and interests are NOT updated to MongoDB server (as requested)
-    /*
     if (hasBio) {
       updateData.bio = normalizeStringInput(bio, 500);
     }
@@ -2167,7 +2028,6 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
     if (hasInterests) {
       updateData.interests = normalizeInterests(interests, 20) || [];
     }
-    */
 
     if (xp) {
       updateData.xp = typeof xp === 'object' ? xp : {};
@@ -2221,7 +2081,7 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
       Logger.info('user/update', '✅ Profile marked as complete', { userId });
     }
 
-    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'avatarColor', 'profileImageUrl', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
+    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
     const safeUpdateData = {};
     for (const key of safeFields) {
       if (Object.prototype.hasOwnProperty.call(updateData, key)) {
@@ -2229,20 +2089,10 @@ app.post('/user/:userId/update', validateProfileUpdate, async (req, res) => {
       }
     }
 
-    // ✅ OPTIMIZED: Use lean() for the response
-    const user = await User.findOneAndUpdate(
-      { userId },
-      {
-        $set: safeUpdateData,
-        $setOnInsert: {
-          userId,
-          createdAt: new Date(),
-          authType: 'GOOGLE_OAUTH',
-          isGuest: false,
-        },
-      },
-      { upsert: true, new: true, lean: true, setDefaultsOnInsert: true }
-    ).exec();
+    const user = await updateUserById(userId, safeUpdateData);
+    if (!user) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
 
     // ✅ PERFORMANCE: Invalidate cache so next request gets fresh data
     userCache.invalidate(userId);
@@ -2331,22 +2181,14 @@ async function verifyDeleteCredentials(credentials = {}) {
     throw error;
   }
 
-  const lookup = { $or: [] };
+  let user = null;
   if (explicitUserId) {
-    lookup.$or.push({ userId: String(explicitUserId).trim() });
+    user = await getUserById(String(explicitUserId).trim());
   }
-  if (normalizedEmail) {
-    lookup.$or.push({ email: normalizedEmail });
-  }
-
-  if (lookup.$or.length === 0) {
-    const error = new Error('Email and password are required');
-    error.code = 'INVALID_CREDENTIALS';
-    error.statusCode = 400;
-    throw error;
+  if (!user && normalizedEmail) {
+    user = await getUserByEmail(normalizedEmail);
   }
 
-  const user = await User.findOne(lookup);
   if (!user) {
     const error = new Error('User not found');
     error.code = 'USER_NOT_FOUND';
@@ -2387,7 +2229,7 @@ async function deleteUserAccount(userId, requestContext = {}) {
     requestContext: requestContext && Object.keys(requestContext).length ? requestContext : undefined,
   });
 
-  const user = await User.findOne({ userId: normalizedUserId }).lean().exec();
+  const user = await getUserById(normalizedUserId);
   if (!user) {
     const error = new Error('User not found');
     error.code = 'USER_NOT_FOUND';
@@ -2395,47 +2237,26 @@ async function deleteUserAccount(userId, requestContext = {}) {
     throw error;
   }
 
-  const deleteUserResult = await User.deleteOne({ userId: normalizedUserId });
-  if (deleteUserResult.deletedCount === 0) {
-    const error = new Error('Failed to delete user account');
-    error.code = 'DELETE_FAILED';
-    error.statusCode = 500;
-    throw error;
-  }
+  await deleteUserById(normalizedUserId);
 
   Logger.info('user/delete', '✅ User record deleted', { userId: normalizedUserId });
 
-  const friendDeleteResult = await Friend.deleteMany({
-    $or: [
-      { userId: normalizedUserId },
-      { friendId: normalizedUserId },
-    ],
-  });
+  const friendDeleteCount = await deleteFriendRelationsForUser(normalizedUserId);
   Logger.info('user/delete', '✅ Friend relationships cleaned up', {
     userId: normalizedUserId,
-    deletedCount: friendDeleteResult.deletedCount,
+    deletedCount: friendDeleteCount,
   });
 
-  const blockedDeleteResult = await BlockedUser.deleteMany({
-    $or: [
-      { userId: normalizedUserId },
-      { blockedByUserId: normalizedUserId },
-    ],
-  });
+  const blockedDeleteCount = await deleteBlocksForUser(normalizedUserId);
   Logger.info('user/delete', '✅ Blocked user records cleaned up', {
     userId: normalizedUserId,
-    deletedCount: blockedDeleteResult.deletedCount,
+    deletedCount: blockedDeleteCount,
   });
 
-  const reportDeleteResult = await Report.deleteMany({
-    $or: [
-      { reportedUserId: normalizedUserId },
-      { reporterId: normalizedUserId },
-    ],
-  });
+  const reportDeleteCount = await deleteReportsForUserAndReporter(normalizedUserId);
   Logger.info('user/delete', '✅ Report records cleaned up', {
     userId: normalizedUserId,
-    deletedCount: reportDeleteResult.deletedCount,
+    deletedCount: reportDeleteCount,
   });
 
   userCache.invalidate(normalizedUserId);
@@ -2672,28 +2493,11 @@ const REPORT_CONFIG = {
 // ========== GENDER FILTER SYSTEM ==========
 const userGenderPreferences = new Map(); // userId -> 'male'|'female'|'other'|'all'
 
-// ========== BLOCKING & REPORTING SYSTEM (MONGODB-BACKED) ==========
 
 // Check if a user is currently blocked
 async function isUserBlocked(userId) {
   try {
-    const now = new Date();
-    
-    // Find active blocks
-    const block = await BlockedUser.findOne({
-      userId,
-      $or: [
-        { blockedUntil: null }, // Permanent blocks
-        { blockedUntil: { $gte: now } }, // Temporary blocks still active
-      ],
-    });
-    
-    if (block && block.blockedUntil && block.blockedUntil <= now) {
-      // Block has expired, delete it
-      await BlockedUser.deleteOne({ _id: block._id });
-      return false;
-    }
-    
+    const block = await getActiveBlock(userId);
     return !!block;
   } catch (err) {
     Logger.error('isUserBlocked', 'Error checking block status', err.message);
@@ -2705,19 +2509,14 @@ async function isUserBlocked(userId) {
 async function recordReport(reportedUserId, reporterId, reason = 'User reported') {
   try {
     Logger.info('recordReport', 'Processing report', { reportedUserId, reporterId });
-    
+
     if (!reportedUserId || !reporterId) {
       Logger.warn('recordReport', 'Invalid inputs', { reportedUserId, reporterId });
       return false;
     }
-    
+
     // Check if this reporter already reported this user in last 24 hours
-    const existingReport = await Report.findOne({
-      reportedUserId,
-      reporterId,
-      createdAt: { $gte: new Date(Date.now() - REPORT_CONFIG.reportWindowMs) },
-    });
-    
+    const existingReport = await getReport(reportedUserId, reporterId);
     if (existingReport) {
       Logger.warn('recordReport', 'Duplicate report from same reporter within 24 hours', {
         reportedUserId,
@@ -2725,28 +2524,23 @@ async function recordReport(reportedUserId, reporterId, reason = 'User reported'
       });
       return false;
     }
-    
-    // Create new report
-    const newReport = new Report({
-      reportedUserId,
-      reporterId,
-      reason,
-    });
-    await newReport.save();
-    
-    // Count recent unique reports
-    const recentReports = await Report.find({
-      reportedUserId,
-      createdAt: { $gte: new Date(Date.now() - REPORT_CONFIG.reportWindowMs) },
-    }).distinct('reporterId');
-    
-    const reportCount = recentReports.length;
+
+    await createReport(reportedUserId, reporterId, reason);
+
+    // Count recent unique reports in the last window
+    const reports = await getReportsForUser(reportedUserId);
+    const cutoff = new Date(Date.now() - REPORT_CONFIG.reportWindowMs).toISOString();
+    const recentReports = reports
+      .filter((report) => report.createdAt && report.createdAt >= cutoff)
+      .map((report) => report.reporterId);
+    const uniqueReporters = Array.from(new Set(recentReports));
+    const reportCount = uniqueReporters.length;
+
     Logger.info('recordReport', 'Recent report count', { reportedUserId, count: reportCount });
-    
-    // Determine block duration based on report count
+
     let blockDuration = null;
     let blockReason = '';
-    
+
     if (reportCount >= 5) {
       blockDuration = REPORT_CONFIG.blockDuration_5reports_Ms;
       blockReason = '5+ reports - 24 hour block';
@@ -2757,33 +2551,27 @@ async function recordReport(reportedUserId, reporterId, reason = 'User reported'
       blockDuration = REPORT_CONFIG.blockDuration_1report_Ms;
       blockReason = '1+ reports - 10 minute block';
     }
-    
+
     if (blockDuration) {
       const blockedUntil = new Date(Date.now() + blockDuration);
-      
-      // Create or update block
-      await BlockedUser.findOneAndUpdate(
-        { userId: reportedUserId },
-        {
-          userId: reportedUserId,
-          blockedByUserId: reporterId,
-          reason: blockReason,
-          blockType: 'report',
-          blockDuration,
-          blockedUntil,
-          reportCount,
-          reporters: recentReports,
-        },
-        { upsert: true, new: true }
-      );
-      
+      await putBlockedUser({
+        userId: reportedUserId,
+        blockedByUserId: reporterId,
+        reason: blockReason,
+        blockType: 'report',
+        blockDuration,
+        blockedUntil,
+        reportCount,
+        reporters: uniqueReporters,
+      });
+
       Logger.warn('recordReport', `User blocked: ${blockReason}`, {
         reportedUserId,
+        reporterId,
         reportCount,
-        blockedUntil,
       });
     }
-    
+
     return true;
   } catch (err) {
     Logger.error('recordReport', 'Error recording report', err.message);
@@ -2903,19 +2691,18 @@ function decomposeRoom(socketId, roomType = 'video') {
   }
 }
 
-// ✅ NEW HELPER: Fetch fresh profile from MongoDB to get latest profileImageUrl
 async function getFreshUserProfile(userId) {
   try {
     if (!userId) return null;
-    
-    const user = await User.findOne({ userId }).lean().select('userId userName avatarColor gender country profileImageUrl').exec();
-    
+
+    const user = await getUserById(userId);
+
     if (user) {
       Logger.debug('getFreshUserProfile', 'Fetched fresh user profile', { userId, hasProfileImageUrl: !!user.profileImageUrl });
     } else {
-      Logger.warn('getFreshUserProfile', 'User not found in MongoDB', { userId });
+      Logger.warn('getFreshUserProfile', 'User not found in DynamoDB', { userId });
     }
-    
+
     return user;
   } catch (error) {
     Logger.error('getFreshUserProfile', 'Error fetching fresh profile', { userId, error: error.message });
@@ -3020,7 +2807,7 @@ async function attemptMatch(roomType = 'video') {
     const user1DataValid = ensureUserData(user1.userData, user1.socketId);
     const user2DataValid = ensureUserData(user2.userData, user2.socketId);
 
-    // ✅ NEW: Fetch fresh profiles from MongoDB to get latest profileImageUrl
+    // ✅ NEW: Fetch fresh profiles from DynamoDB to get latest profileImageUrl
     // This ensures profile images are always current, not stale socket-register data
     const user1FreshProfile = user1DataValid.userId ? await getFreshUserProfile(user1DataValid.userId) : null;
     const user2FreshProfile = user2DataValid.userId ? await getFreshUserProfile(user2DataValid.userId) : null;
@@ -3041,7 +2828,7 @@ async function attemptMatch(roomType = 'video') {
       user2DataValid.gender = user2FreshProfile.gender || user2DataValid.gender;
       user2DataValid.country = user2FreshProfile.country || user2DataValid.country;
     }
-    Logger.info('attemptMatch', 'Merged fresh profiles from MongoDB', {
+    Logger.info('attemptMatch', 'Merged fresh profiles from DynamoDB', {
       user1: { id: user1DataValid.userId, hasProfileImageUrl: !!user1DataValid.profileImageUrl },
       user2: { id: user2DataValid.userId, hasProfileImageUrl: !!user2DataValid.profileImageUrl },
     });
@@ -3805,7 +3592,7 @@ io.on('connection', (socket) => {
 
   // Voice space handlers consolidated later in this file (use in-memory `activeVoiceSpaces`)
 
-  // ✅ NEW: Report a user (MongoDB-backed)
+  // ✅ NEW: Report a user (DynamoDB-backed)
   socket.on('report_user', async (data, callback) => {
     try {
       Logger.info('report_user', 'RECEIVED report_user event', { data });
@@ -3829,7 +3616,7 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // Record report in MongoDB
+      // Record report in DynamoDB
       const result = await recordReport(reportedUserId, reporterId, reason);
       Logger.info('report_user', `User ${reportedUserId} reported by ${reporterId}`, { 
         reported: reportedUserId, 
@@ -3914,7 +3701,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Find partner for video/chat (MongoDB-backed blocking checks)
+  // Find partner for video/chat (DynamoDB-backed blocking checks)
   socket.on('find_partner', async (data) => {
     try {
       const roomType = (data && data.type) || 'video';
@@ -3947,7 +3734,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // ✅ NEW: Check if user is blocked by reports (MongoDB-backed, async)
+      // ✅ NEW: Check if user is blocked by reports (DynamoDB-backed, async)
       if (userData && userData.userId) {
         const blocked = await isUserBlocked(userData.userId);
         if (blocked) {
@@ -3956,10 +3743,9 @@ io.on('connection', (socket) => {
             userName: userData.userName 
           });
           
-          // Get block info from MongoDB
-          const blockInfo = await BlockedUser.findOne({ userId: userData.userId }).lean();
+          const blockInfo = await getActiveBlock(userData.userId);
           const remainingMs = blockInfo && blockInfo.blockedUntil 
-            ? Math.max(0, blockInfo.blockedUntil - Date.now())
+            ? Math.max(0, new Date(blockInfo.blockedUntil).getTime() - Date.now())
             : 0;
           
           const remainingSeconds = Math.ceil(remainingMs / 1000);
@@ -4265,8 +4051,23 @@ io.on('connection', (socket) => {
   });
 
   // ===== Voice Space WebRTC Signaling =====
-  // Offer from a participant to the host for space-based voice connection
-  socket.on('space_webrtc_offer', (data) => {
+    // Voice Space Emoji Reactions
+    socket.on('space_reaction', (data) => {
+      try {
+        const spaceId = data && data.spaceId ? String(data.spaceId) : null;
+        const userId = data && data.userId ? String(data.userId) : null;
+        const reaction = data && data.reaction ? String(data.reaction) : null;
+        if (!spaceId || !userId || !reaction) return;
+        const space = activeVoiceSpaces.get(spaceId);
+        if (!space) return;
+        io.to(`space:${spaceId}`).emit('space_reaction', { userId, reaction });
+      } catch (err) {
+        Logger.error('space_reaction', 'Error broadcasting reaction', err && err.message);
+      }
+    });
+
+    // Offer from a participant to the host for space-based voice connection
+    socket.on('space_webrtc_offer', (data) => {
     try {
       const spaceId = data && data.spaceId ? String(data.spaceId) : null;
       if (!spaceId) return;
@@ -4662,7 +4463,7 @@ io.on('connection', (socket) => {
         : '';
 
       // Build message payload
-      // ✅ NEW: Fetch fresh sender profile from MongoDB for latest profileImageUrl
+      // ✅ NEW: Fetch fresh sender profile from DynamoDB for latest profileImageUrl
       const senderFreshProfile = senderId ? await getFreshUserProfile(senderId) : null;
       
       const messagePayload = {
@@ -4863,7 +4664,8 @@ io.on('connection', (socket) => {
         hostName: profileMeta.userName,
         hostAvatar: profileMeta.avatarLetter,
         hostAvatarColor: profileMeta.avatarColor,
-        hostProfileImageUrl: profileMeta.profileImageUrl,
+        hostProfileImageUrl: profileMeta.profileImageUrl || profileMeta.profileImagePath || null,
+        hostProfileImagePath: profileMeta.profileImagePath || profileMeta.profileImageUrl || null,
         isPrivate: data.isPrivate || false,
         speakerLimit: Math.min(Math.max(data.speakerLimit || 5, 1), 50),
         roomType: String(data.roomType || 'FREE').substring(0, 20),
@@ -4963,7 +4765,8 @@ io.on('connection', (socket) => {
               userName: existingParticipant.userName,
               avatarColor: existingParticipant.avatarColor,
               avatarLetter: existingParticipant.avatarLetter,
-              profileImagePath: existingParticipant.profileImageUrl || null,
+              profileImagePath: existingParticipant.profileImagePath || existingParticipant.profileImageUrl || null,
+              profileImageUrl: existingParticipant.profileImageUrl || existingParticipant.profileImagePath || null,
               joinedAt: Date.now(),
             });
             userSockets.set(userId, socket.id);
@@ -5369,12 +5172,12 @@ io.on('connection', (socket) => {
       });
 
       // ✅ FIXED: Send complete member list to new joiner (for animations)
-      // ✅ NEW: Enrich members with fresh profiles from MongoDB for latest profileImageUrl
+      // ✅ NEW: Enrich members with fresh profiles from DynamoDB for latest profileImageUrl
       const allMembers = [];
       for (const memberSocketId of roomSet) {
         const memberMeta = socketMetadata.get(memberSocketId) || {};
         
-        // Fetch fresh profile from MongoDB if we have a userId
+        // Fetch fresh profile from DynamoDB if we have a userId
         const freshProfile = memberMeta.userId ? await getFreshUserProfile(memberMeta.userId) : null;
         
         const memberData = {
@@ -5917,9 +5720,7 @@ setInterval(() => {
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// ========== SERVER STARTUP ==========
-// The server starts automatically once MongoDB is connected.
-// This prevents accepting requests before the database is available.
+
 
 // ========== GRACEFUL SHUTDOWN ==========
 // Handle graceful shutdown on SIGTERM/SIGINT (production standard signals)
@@ -5972,16 +5773,8 @@ const gracefulShutdown = async (signal) => {
       }
     }
 
-    // ✅ Step 4: Close MongoDB connection gracefully
-    Logger.info('shutdown', 'Closing MongoDB connection...');
-    if (mongoose.connection && mongoose.connection.db) {
-      try {
-        await mongoose.connection.close();
-        Logger.info('shutdown', 'MongoDB connection closed gracefully');
-      } catch (err) {
-        Logger.warn('shutdown', 'Error closing MongoDB', { error: err.message });
-      }
-    }
+    // ✅ Step 4: Clean shutdown without legacy database shutdown since DynamoDB is used
+    Logger.info('shutdown', 'Skipping legacy database shutdown; using DynamoDB via AWS SDK');
 
     // ✅ Step 5: Clear in-memory state
     Logger.info('shutdown', 'Clearing in-memory state...', {

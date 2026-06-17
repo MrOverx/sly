@@ -1,6 +1,6 @@
 {
   "name": "slyxyserver",
-  "version": "1.47.0",
+  "version": "1.48.0",
   "main": "ws_server.js",
   "scripts": {
     "start": "node ws_server.js",
@@ -9,15 +9,17 @@
   },
   "author": "",
   "license": "ISC",
-  "description": "SLYXY WebSocket Server with MongoDB Backend",
+  "description": "SLYXY WebSocket Server with DynamoDB Backend",
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.330.0",
+    "@aws-sdk/lib-dynamodb": "^3.330.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^5.2.1",
     "helmet": "^7.1.0",
-    "mongoose": "^7.5.0",
+    "multer": "^2.2.0",
     "nodemailer": "^6.9.14",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
