@@ -483,6 +483,11 @@ async function deleteFriendRequest(userId, friendId) {
 
 async function getFriendRequestByRequestId(requestId) {
   if (!requestId) return null;
+  const normalizedRequestId = String(requestId)
+    .trim()
+    .replace(/^"+|"+$/g, '')
+    .replace(/^'+|'+$/g, '');
+
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
     FilterExpression: 'itemType = :friendType AND requestId = :requestId',
@@ -491,7 +496,7 @@ async function getFriendRequestByRequestId(requestId) {
     },
     ExpressionAttributeValues: {
       ':friendType': 'FRIEND',
-      ':requestId': requestId,
+      ':requestId': normalizedRequestId,
     },
     Limit: 1,
     ProjectionExpression: 'PK, SK, userId, friendId, #status, createdAt, updatedAt, requestId, friendIndexKey',

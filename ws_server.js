@@ -730,7 +730,10 @@ function closeSpaceAsHost(spaceId, reason = 'host_disconnected') {
 function normalizeId(id) {
   if (id === undefined || id === null) return '';
   try {
-    return String(id).trim();
+    return String(id)
+      .trim()
+      .replace(/^"+|"+$/g, '')
+      .replace(/^'+|'+$/g, '');
   } catch (e) {
     return '';
   }
@@ -1619,6 +1622,7 @@ app.post('/friends/add', async (req, res) => {
     if (recipientSocketId && senderUser) {
       io.to(recipientSocketId).emit('friend_request', {
         requestId: friendRequest.requestId,
+        userId: userId,
         fromUserId: userId,
         fromUserName: senderUser.userName || 'Unknown',
         fromUserAvatar: senderUser.avatarColor || '#128C7F',
@@ -1631,7 +1635,7 @@ app.post('/friends/add', async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Friend request sent successfully',
-      requestId: friendRequest._id,
+      requestId: friendRequest.requestId,
     });
 
   } catch (err) {
@@ -1647,15 +1651,23 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
   }
 
   try {
-    const { requestId } = req.params;
+    const rawRequestId = req.params.requestId;
+    const requestId = normalizeId(rawRequestId);
     const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
 
     if (!userId || !requestId) {
       return sendError(res, 400, 'userId and requestId are required');
     }
 
-    // Find the friend request
-    const friendRequest = await getFriendRequestByRequestId(requestId);
+    // Find the friend request by requestId, fallback to parsed pair if needed
+    let friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest && requestId.includes('|')) {
+      const [senderId, recipientId] = requestId.split('|').map(normalizeId);
+      if (senderId.isNotEmpty && recipientId.isNotEmpty) {
+        friendRequest = await getFriendRequest(senderId, recipientId);
+      }
+    }
+
     if (!friendRequest) {
       return sendError(res, 404, 'Friend request not found');
     }
@@ -1667,6 +1679,10 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
 
     // ✅ OPTIMIZED: Update request status
     const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'accepted');
+    if (!updatedRequest) {
+      Logger.error('friends/request/accept', 'Failed to update friend request status', { requestId, userId });
+      return sendError(res, 500, 'Failed to accept friend request');
+    }
 
     // ✅ Invalidate cache for both users since friend lists changed
     userCache.invalidate(userId);
@@ -1709,15 +1725,23 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
   }
 
   try {
-    const { requestId } = req.params;
+    const rawRequestId = req.params.requestId;
+    const requestId = normalizeId(rawRequestId);
     const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
 
     if (!userId || !requestId) {
       return sendError(res, 400, 'userId and requestId are required');
     }
 
-    // Find the friend request by requestId
-    const friendRequest = await getFriendRequestByRequestId(requestId);
+    // Find the friend request by requestId, fallback to parsed pair if needed
+    let friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest && requestId.includes('|')) {
+      const [senderId, recipientId] = requestId.split('|').map(normalizeId);
+      if (senderId.isNotEmpty && recipientId.isNotEmpty) {
+        friendRequest = await getFriendRequest(senderId, recipientId);
+      }
+    }
+
     if (!friendRequest) {
       return sendError(res, 404, 'Friend request not found');
     }
@@ -1871,8 +1895,10 @@ app.get('/friends/requests/incoming', async (req, res) => {
     const requestsList = incomingRequests.map((request) => {
       const normalizedSenderId = normalizeId(request.userId);
       const sender = senderUsers.find((u) => normalizeId(u.userId) === normalizedSenderId);
+      const requestId = normalizeId(request.requestId) ||
+        (request.userId && request.friendId ? `${normalizeId(request.userId)}|${normalizeId(request.friendId)}` : '');
       return {
-        requestId: request._id.toString(),
+        requestId,
         userId: normalizedSenderId,
         id: normalizedSenderId,
         friendId: normalizedSenderId,
@@ -1922,8 +1948,10 @@ app.get('/friends/requests/outgoing', async (req, res) => {
     const requestsList = outgoingRequests.map((request) => {
       const normalizedRecipientId = normalizeId(request.friendId);
       const recipient = recipientUsers.find((u) => normalizeId(u.userId) === normalizedRecipientId);
+      const requestId = normalizeId(request.requestId) ||
+        (request.userId && request.friendId ? `${normalizeId(request.userId)}|${normalizeId(request.friendId)}` : '');
       return {
-        requestId: request._id.toString(),
+        requestId,
         userId: normalizedRecipientId,
         id: normalizedRecipientId,
         friendId: normalizedRecipientId,
@@ -2042,10 +2070,10 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       lastDailyXpAwardedAt,
     } = req.body;
 
-    const hasStatus = Object.prototype.hasOwnProperty.call(req.body, 'status');
-    const hasBio = Object.prototype.hasOwnProperty.call(req.body, 'bio');
-    const hasInterests = Object.prototype.hasOwnProperty.call(req.body, 'interests');
-    const hasProfileImageUrl = Object.prototype.hasOwnProperty.call(req.body, 'profileImageUrl');
+    const hasStatus = typeof status === 'string' && status.trim().length > 0;
+    const hasBio = typeof bio === 'string' && bio.trim().length > 0;
+    const hasInterests = Array.isArray(req.body.interests);
+    const hasProfileImageUrl = typeof profileImageUrl === 'string' && profileImageUrl.trim().length > 0;
 
     Logger.info('user/update', 'Received profile update payload', {
       userId,

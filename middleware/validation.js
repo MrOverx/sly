@@ -144,25 +144,60 @@ function validateProfileUpdate(req, res, next) {
       : undefined;
 
     // Sanitize inputs
-    req.body = {
+    const sanitizedBody = {
       userId: String(userId).trim(),
-      userName: userName ? String(userName).trim() : undefined,
-      gender: gender ? String(gender).toLowerCase() : undefined,
-      country: country ? String(country).trim() : undefined,
-      avatarColor: avatarColor ? String(avatarColor) : undefined,
-      status: status ? String(status).trim() : undefined,
-      bio: bio ? String(bio).trim() : undefined,
-      interests: sanitizedInterests,
-      profileImageUrl: req.body.profileImageUrl ? String(req.body.profileImageUrl) : undefined,
-      profileImagePath: req.body.profileImagePath ? String(req.body.profileImagePath) : undefined,
-      pictureName: req.body.pictureName ? String(req.body.pictureName) : undefined,
-      birthDate: req.body.birthDate ? String(req.body.birthDate).trim() : undefined,
-      email: req.body.email ? String(req.body.email).toLowerCase().trim() : undefined,
-      authType: req.body.authType ? String(req.body.authType).trim() : undefined,
-      isGuest: typeof req.body.isGuest === 'boolean' ? req.body.isGuest : undefined,
-      xp: sanitizedXp,
-      lastDailyXpAwardedAt: sanitizedLastDailyXpAwardedAt,
     };
+
+    if (userName && String(userName).trim().isNotEmpty) {
+      sanitizedBody.userName = String(userName).trim();
+    }
+    if (gender && String(gender).trim().length > 0) {
+      sanitizedBody.gender = String(gender).toLowerCase();
+    }
+    if (country && String(country).trim().length > 0) {
+      sanitizedBody.country = String(country).trim();
+    }
+    if (avatarColor && String(avatarColor).trim().length > 0) {
+      sanitizedBody.avatarColor = String(avatarColor);
+    }
+    if (status && String(status).trim().length > 0) {
+      sanitizedBody.status = String(status).trim();
+    }
+    if (bio && String(bio).trim().length > 0) {
+      sanitizedBody.bio = String(bio).trim();
+    }
+    if (Array.isArray(sanitizedInterests)) {
+      sanitizedBody.interests = sanitizedInterests;
+    }
+    if (req.body.profileImageUrl && String(req.body.profileImageUrl).trim().length > 0) {
+      sanitizedBody.profileImageUrl = String(req.body.profileImageUrl);
+    }
+    if (req.body.profileImagePath && String(req.body.profileImagePath).trim().length > 0) {
+      sanitizedBody.profileImagePath = String(req.body.profileImagePath);
+    }
+    if (req.body.pictureName && String(req.body.pictureName).trim().length > 0) {
+      sanitizedBody.pictureName = String(req.body.pictureName);
+    }
+    if (birthDate && String(birthDate).trim().length > 0) {
+      sanitizedBody.birthDate = String(birthDate).trim();
+    }
+    if (req.body.email && String(req.body.email).trim().length > 0) {
+      sanitizedBody.email = String(req.body.email).toLowerCase().trim();
+    }
+    if (req.body.authType && String(req.body.authType).trim().length > 0) {
+      sanitizedBody.authType = String(req.body.authType).trim();
+    }
+    if (typeof req.body.isGuest === 'boolean') {
+      sanitizedBody.isGuest = req.body.isGuest;
+    }
+    if (sanitizedXp) {
+      sanitizedBody.xp = sanitizedXp;
+    }
+    if (sanitizedLastDailyXpAwardedAt) {
+      sanitizedBody.lastDailyXpAwardedAt = sanitizedLastDailyXpAwardedAt;
+    }
+
+    req.body = sanitizedBody;
 
     Logger.debug('validation', 'Profile update validated', {
       userId: req.body.userId,
