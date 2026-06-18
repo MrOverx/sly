@@ -87,12 +87,7 @@ function buildItemKey(prefix, id, sk = METADATA_SK) {
 }
 
 function buildUserPrimaryKey(userId) {
-  const key = {};
-  key[TABLE_HASH_KEY] = userId;
-  if (TABLE_HAS_SORT_KEY) {
-    key[TABLE_RANGE_KEY] = METADATA_SK;
-  }
-  return key;
+  return buildItemKey(USER_PREFIX, userId);
 }
 
 function toIso(value) {
@@ -258,6 +253,61 @@ async function getUserByEmail(email) {
     }));
     return scan.Items && scan.Items.length ? scan.Items[0] : null;
   }
+}
+
+async function findUserByLookup(lookup) {
+  if (!lookup || typeof lookup !== 'object') return null;
+
+  if (lookup.userId) {
+    return getUserById(String(lookup.userId).trim());
+  }
+
+  if (lookup.email) {
+    return getUserByEmail(lookup.email);
+  }
+
+  if (Array.isArray(lookup.$or)) {
+    for (const clause of lookup.$or) {
+      if (clause.userId) {
+        const user = await getUserById(String(clause.userId).trim());
+        if (user) return user;
+      }
+      if (clause.email) {
+        if (typeof clause.email === 'string') {
+          const user = await getUserByEmail(clause.email);
+          if (user) return user;
+        } else if (typeof clause.email === 'object' && clause.email.$regex) {
+          const regexValue = String(clause.email.$regex);
+          const normalizedEmail = regexValue.replace(/^\^|\$$/g, '');
+          const user = await getUserByEmail(normalizedEmail);
+          if (user) return user;
+        }
+      }
+    }
+  }
+
+  const scanFilters = [];
+  const expressionValues = {};
+
+  if (lookup.userId) {
+    scanFilters.push('userId = :userId');
+    expressionValues[':userId'] = String(lookup.userId).trim();
+  }
+  if (lookup.email) {
+    scanFilters.push('emailLower = :emailLower');
+    expressionValues[':emailLower'] = normalizeEmail(lookup.email);
+  }
+
+  if (!scanFilters.length) return null;
+
+  const result = await ddb.send(new ScanCommand({
+    TableName: TABLE_NAME,
+    FilterExpression: scanFilters.join(' AND '),
+    ExpressionAttributeValues: expressionValues,
+    Limit: 1,
+  }));
+
+  return result.Items && result.Items.length ? result.Items[0] : null;
 }
 
 function normalizeDdbItem(item) {
@@ -786,6 +836,7 @@ module.exports = {
   isDbConnected,
   getUserById,
   getUserByEmail,
+  findUserByLookup,
   upsertUser,
   createUser,
   updateUserById,

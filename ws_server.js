@@ -39,6 +39,7 @@ const {
   isDbConnected,
   getUserById,
   getUserByEmail,
+  findUserByLookup,
   upsertUser,
   createUser,
   updateUserById,
@@ -356,7 +357,16 @@ if (!DYNAMODB_REGION || !DYNAMODB_TABLE) {
   process.exit(1);
 }
 
+const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || null;
+const AWS_S3_PROFILE_FOLDER = process.env.AWS_S3_PROFILE_FOLDER || 'profiles';
+const AWS_S3_PUBLIC_URL = process.env.AWS_S3_PUBLIC_URL || null;
+const S3_CONFIGURED = Boolean(AWS_S3_BUCKET);
+
 Logger.info('dynamodb', `🔐 DynamoDB region: ${DYNAMODB_REGION}, table: ${DYNAMODB_TABLE}`);
+Logger.info('aws', `☁️ S3 uploads ${S3_CONFIGURED ? 'enabled' : 'disabled'}; bucket: ${AWS_S3_BUCKET || 'NOT_SET'}; publicUrl: ${AWS_S3_PUBLIC_URL || 'none'}; profileFolder: ${AWS_S3_PROFILE_FOLDER}`);
+if (!S3_CONFIGURED) {
+  Logger.warn('aws', '⚠️ S3 uploads are disabled because AWS_S3_BUCKET is not configured. Upload endpoints will return S3_CONFIG_MISSING.');
+}
 
 // ========== CONFIGURATION ==========
 const CONFIG = {
