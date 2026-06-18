@@ -102,6 +102,10 @@ function validateProfileUpdate(req, res, next) {
       return sendError(res, 400, 'User ID is required', 'VALIDATION_ERROR');
     }
 
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return sendError(res, 400, 'Invalid profile data: request body must be a JSON object', 'VALIDATION_ERROR');
+    }
+
     // Validate optional fields
     const {
       userName,
@@ -113,22 +117,90 @@ function validateProfileUpdate(req, res, next) {
       interests,
       xp,
       lastDailyXpAwardedAt,
+      profileImageUrl,
+      profileImagePath,
+      pictureName,
+      authType,
+      email,
+      isGuest,
     } = req.body;
 
-    if (userName && (userName.length < 2 || userName.length > 50)) {
-      return sendError(res, 400, 'Username must be 2-50 characters', 'VALIDATION_ERROR');
+    if (userName != null) {
+      if (typeof userName !== 'string') {
+        return sendError(res, 400, 'Invalid userName value', 'VALIDATION_ERROR');
+      }
+      const trimmedUserName = userName.trim();
+      if (trimmedUserName.length > 0 && (trimmedUserName.length < 2 || trimmedUserName.length > 50)) {
+        return sendError(res, 400, 'Username must be 2-50 characters', 'VALIDATION_ERROR');
+      }
     }
 
-    if (gender && !['male', 'female', 'other'].includes(gender.toLowerCase())) {
-      return sendError(res, 400, 'Invalid gender value', 'VALIDATION_ERROR');
+    if (gender != null) {
+      if (typeof gender !== 'string') {
+        return sendError(res, 400, 'Invalid gender value', 'VALIDATION_ERROR');
+      }
+      const trimmedGender = gender.toLowerCase().trim();
+      if (trimmedGender.length > 0 && !['male', 'female', 'other'].includes(trimmedGender)) {
+        return sendError(res, 400, 'Invalid gender value', 'VALIDATION_ERROR');
+      }
     }
 
-    if (status && status.length > 150) {
-      return sendError(res, 400, 'Status cannot exceed 150 characters', 'VALIDATION_ERROR');
+    if (country != null && typeof country !== 'string') {
+      return sendError(res, 400, 'Invalid country value', 'VALIDATION_ERROR');
     }
 
-    if (bio && bio.length > 500) {
-      return sendError(res, 400, 'Bio cannot exceed 500 characters', 'VALIDATION_ERROR');
+    if (avatarColor != null && typeof avatarColor !== 'string') {
+      return sendError(res, 400, 'Invalid avatarColor value', 'VALIDATION_ERROR');
+    }
+
+    if (status != null) {
+      if (typeof status !== 'string') {
+        return sendError(res, 400, 'Invalid status value', 'VALIDATION_ERROR');
+      }
+      if (status.trim().length > 150) {
+        return sendError(res, 400, 'Status cannot exceed 150 characters', 'VALIDATION_ERROR');
+      }
+    }
+
+    if (bio != null) {
+      if (typeof bio !== 'string') {
+        return sendError(res, 400, 'Invalid bio value', 'VALIDATION_ERROR');
+      }
+      if (bio.trim().length > 500) {
+        return sendError(res, 400, 'Bio cannot exceed 500 characters', 'VALIDATION_ERROR');
+      }
+    }
+
+    if (profileImageUrl != null && typeof profileImageUrl !== 'string') {
+      return sendError(res, 400, 'Invalid profileImageUrl value', 'VALIDATION_ERROR');
+    }
+
+    if (profileImagePath != null && typeof profileImagePath !== 'string') {
+      return sendError(res, 400, 'Invalid profileImagePath value', 'VALIDATION_ERROR');
+    }
+
+    if (pictureName != null && typeof pictureName !== 'string') {
+      return sendError(res, 400, 'Invalid pictureName value', 'VALIDATION_ERROR');
+    }
+
+    if (authType != null && typeof authType !== 'string') {
+      return sendError(res, 400, 'Invalid authType value', 'VALIDATION_ERROR');
+    }
+
+    if (email != null && typeof email !== 'string') {
+      return sendError(res, 400, 'Invalid email value', 'VALIDATION_ERROR');
+    }
+
+    if (isGuest != null && typeof isGuest !== 'boolean') {
+      return sendError(res, 400, 'Invalid isGuest value', 'VALIDATION_ERROR');
+    }
+
+    if (xp != null && (typeof xp !== 'object' || Array.isArray(xp))) {
+      return sendError(res, 400, 'Invalid xp value', 'VALIDATION_ERROR');
+    }
+
+    if (lastDailyXpAwardedAt != null && typeof lastDailyXpAwardedAt !== 'string') {
+      return sendError(res, 400, 'Invalid lastDailyXpAwardedAt value', 'VALIDATION_ERROR');
     }
 
     const sanitizedInterests = Array.isArray(interests)
@@ -148,7 +220,7 @@ function validateProfileUpdate(req, res, next) {
       userId: String(userId).trim(),
     };
 
-    if (userName && String(userName).trim().isNotEmpty) {
+    if (userName && String(userName).trim().length > 0) {
       sanitizedBody.userName = String(userName).trim();
     }
     if (gender && String(gender).trim().length > 0) {
@@ -169,8 +241,13 @@ function validateProfileUpdate(req, res, next) {
     if (Array.isArray(sanitizedInterests)) {
       sanitizedBody.interests = sanitizedInterests;
     }
-    if (req.body.profileImageUrl && String(req.body.profileImageUrl).trim().length > 0) {
-      sanitizedBody.profileImageUrl = String(req.body.profileImageUrl);
+    if (req.body.profileImageUrl != null) {
+      if (typeof req.body.profileImageUrl !== 'string') {
+        return sendError(res, 400, 'Invalid profileImageUrl value', 'VALIDATION_ERROR');
+      }
+      if (String(req.body.profileImageUrl).trim().length > 0) {
+        sanitizedBody.profileImageUrl = String(req.body.profileImageUrl).trim();
+      }
     }
     if (req.body.profileImagePath && String(req.body.profileImagePath).trim().length > 0) {
       sanitizedBody.profileImagePath = String(req.body.profileImagePath);
@@ -208,8 +285,11 @@ function validateProfileUpdate(req, res, next) {
     });
     next();
   } catch (err) {
-    Logger.error('validation/profile', 'Validation error', err.message);
-    sendError(res, 400, 'Invalid profile data', 'VALIDATION_ERROR');
+    Logger.error('validation/profile', 'Validation error', err.message, {
+      rawBody: req.body,
+      params: req.params,
+    });
+    sendError(res, 400, `Invalid profile data: ${err.message}`, 'VALIDATION_ERROR');
   }
 }
 

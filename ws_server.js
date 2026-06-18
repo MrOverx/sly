@@ -1663,7 +1663,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     let friendRequest = await getFriendRequestByRequestId(requestId);
     if (!friendRequest && requestId.includes('|')) {
       const [senderId, recipientId] = requestId.split('|').map(normalizeId);
-      if (senderId.isNotEmpty && recipientId.isNotEmpty) {
+      if (senderId && senderId.length > 0 && recipientId && recipientId.length > 0) {
         friendRequest = await getFriendRequest(senderId, recipientId);
       }
     }
@@ -1737,7 +1737,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     let friendRequest = await getFriendRequestByRequestId(requestId);
     if (!friendRequest && requestId.includes('|')) {
       const [senderId, recipientId] = requestId.split('|').map(normalizeId);
-      if (senderId.isNotEmpty && recipientId.isNotEmpty) {
+      if (senderId && senderId.length > 0 && recipientId && recipientId.length > 0) {
         friendRequest = await getFriendRequest(senderId, recipientId);
       }
     }
