@@ -606,20 +606,38 @@ async function resolveUserProfileMetadata(userId, userMeta = {}, fallbackName = 
   const userName = freshProfile?.userName || userMeta.userName || fallbackName;
   const avatarLetter = freshProfile?.userName ? freshProfile.userName.charAt(0).toUpperCase() : (userMeta.avatarLetter || defaultInitial);
   const avatarColor = freshProfile?.avatarColor || userMeta.avatarColor || defaultColor;
-  const profileImageUrl = freshProfile?.profileImageUrl || userMeta.profileImageUrl || userMeta.profileImagePath || null;
-  const profileImagePath = freshProfile?.profileImageUrl || userMeta.profileImagePath || userMeta.profileImageUrl || null;
+  const profileImageUrl = freshProfile?.profileImageUrl || userMeta.profileImageUrl || null;
+  const profileImagePath = getSafeProfileImageReference(freshProfile?.profileImageUrl || userMeta.profileImagePath || userMeta.profileImageUrl || null);
   return { userName, avatarLetter, avatarColor, profileImageUrl, profileImagePath };
 }
 
+function getSafeProfileImageReference(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('data:') ||
+    lower.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+  return null;
+}
+
 function buildParticipant(userId, meta, role) {
+  const safeImageUrl =
+    meta.profileImageUrl || getSafeProfileImageReference(meta.profileImagePath) || null;
   return {
     userId,
     userName: meta.userName,
     role,
     avatarColor: meta.avatarColor,
     avatarLetter: meta.avatarLetter,
-    profileImageUrl: meta.profileImageUrl || meta.profileImagePath || null,
-    profileImagePath: meta.profileImagePath || meta.profileImageUrl || null,
+    profileImageUrl: safeImageUrl,
+    profileImagePath: safeImageUrl,
     joinedAt: Date.now(),
   };
 }
@@ -1953,11 +1971,24 @@ function sanitizeGenderInput(genderValue) {
   return null;
 }
 
+function stripOuterQuotes(value) {
+  if (value == null) return null;
+  let text = String(value).trim();
+  if (text.length >= 2) {
+    const first = text[0];
+    const last = text[text.length - 1];
+    if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
+      text = text.slice(1, -1).trim();
+    }
+  }
+  return text === '' ? null : text;
+}
+
 function normalizeStringInput(value, maxLength = 0, lowerCase = false) {
   if (value == null) return null;
-  const trimmed = String(value).trim();
-  if (trimmed === '') return null;
-  const normalized = maxLength > 0 ? trimmed.slice(0, maxLength) : trimmed;
+  const stripped = stripOuterQuotes(value);
+  if (stripped == null) return null;
+  const normalized = maxLength > 0 ? stripped.slice(0, maxLength) : stripped;
   return lowerCase ? normalized.toLowerCase() : normalized;
 }
 
@@ -2072,8 +2103,8 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       updateData.interests = normalizeInterests(interests, 20) || [];
     }
 
-    if (xp) {
-      updateData.xp = typeof xp === 'object' ? xp : {};
+    if (xp && typeof xp === 'object') {
+      updateData.xp = xp;
     }
 
     if (lastDailyXpAwardedAt) {
@@ -2087,12 +2118,16 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       }
     }
 
-    if (avatarColor) {
-      updateData.avatarColor = normalizeStringInput(avatarColor);
+    const normalizedAvatarColor = normalizeStringInput(avatarColor);
+    if (normalizedAvatarColor) {
+      updateData.avatarColor = normalizedAvatarColor;
     }
 
     if (hasProfileImageUrl) {
-      updateData.profileImageUrl = normalizeStringInput(profileImageUrl);
+      const normalizedProfileImageUrl = normalizeStringInput(profileImageUrl);
+      if (normalizedProfileImageUrl) {
+        updateData.profileImageUrl = normalizedProfileImageUrl;
+      }
     }
 
     const normalizedPictureName = normalizeStringInput(pictureName);
@@ -2101,7 +2136,8 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const normalizedEmail = normalizeStringInput(email, 0, true);
     if (normalizedEmail) updateData.email = normalizedEmail;
 
-    if (authType) updateData.authType = normalizeStringInput(authType);
+    const normalizedAuthType = normalizeStringInput(authType);
+    if (normalizedAuthType) updateData.authType = normalizedAuthType;
     const normalizedIsGuest = normalizeBooleanField(isGuest);
     if (normalizedIsGuest != null) updateData.isGuest = normalizedIsGuest;
 
@@ -2119,7 +2155,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     }
 
     // ✅ Set profileComplete to true if both gender and country are provided
-    if (normalizedGender && country) {
+    if (normalizedGender && normalizedCountry) {
       updateData.profileComplete = true;
       Logger.info('user/update', '✅ Profile marked as complete', { userId });
     }
@@ -4445,6 +4481,10 @@ io.on('connection', (socket) => {
       }
 
       // Extract updated fields
+      const safeUpdateImagePath =
+        getSafeProfileImageReference(data.profileImagePath || data.senderProfileImagePath) ||
+        getSafeProfileImageReference(senderMeta.profileImagePath) ||
+        null;
       const profileUpdate = {
         userId,
         userName: data.userName || senderMeta.userName,
@@ -4455,8 +4495,8 @@ io.on('connection', (socket) => {
         status: data.status ?? senderMeta.status ?? null,
         bio: data.bio ?? senderMeta.bio ?? null,
         interests: Array.isArray(data.interests) ? data.interests : (Array.isArray(senderMeta.interests) ? senderMeta.interests : []),
-        profileImagePath: data.profileImagePath ?? senderMeta.profileImagePath ?? null,
-        profileImageUrl: data.profileImageUrl ?? senderMeta.profileImageUrl ?? null,
+        profileImagePath: safeUpdateImagePath,
+        profileImageUrl: data.profileImageUrl || senderMeta.profileImageUrl || safeUpdateImagePath || null,
         timestamp: Date.now(),
       };
 
@@ -4466,7 +4506,7 @@ io.on('connection', (socket) => {
         userName: profileUpdate.userName,
         avatarColor: profileUpdate.avatarColor,
         avatarLetter: profileUpdate.avatarLetter,
-        profileImagePath: profileUpdate.profileImagePath || senderMeta.profileImagePath,
+        profileImagePath: safeUpdateImagePath,
         profileImageUrl: profileUpdate.profileImageUrl || senderMeta.profileImageUrl,
         status: profileUpdate.status || senderMeta.status,
         bio: profileUpdate.bio || senderMeta.bio,
@@ -4518,6 +4558,13 @@ io.on('connection', (socket) => {
       // Build message payload
       // ✅ NEW: Fetch fresh sender profile from DynamoDB for latest profileImageUrl
       const senderFreshProfile = senderId ? await getFreshUserProfile(senderId) : null;
+      const safeSenderImage =
+        senderFreshProfile?.profileImageUrl ||
+        senderMeta.profileImageUrl ||
+        getSafeProfileImageReference(senderMeta.profileImagePath) ||
+        getSafeProfileImageReference(data.profileImagePath) ||
+        getSafeProfileImageReference(data.senderProfileImagePath) ||
+        null;
       
       const messagePayload = {
         id: finalMessageId,
@@ -4531,9 +4578,9 @@ io.on('connection', (socket) => {
         mediaUrl,
         mediaType,
         replyTo: data.replyTo || null,
-        profileImagePath: senderMeta.profileImagePath,
-        profileImageUrl: senderFreshProfile?.profileImageUrl || null,
-        senderProfileImagePath: senderMeta.profileImagePath,
+        profileImagePath: safeSenderImage,
+        profileImageUrl: senderFreshProfile?.profileImageUrl || senderMeta.profileImageUrl || safeSenderImage || null,
+        senderProfileImagePath: safeSenderImage,
         avatarColor: (senderFreshProfile?.avatarColor || senderMeta.avatarColor || '#128C7E'),
         avatarLetter: senderMeta.avatarLetter || 'U',
         timestamp: new Date().toISOString(),
@@ -5204,11 +5251,12 @@ io.on('connection', (socket) => {
       try {
         const meta = socketMetadata.get(socket.id) || {};
         const incomingProfile = data?.profileImagePath || data?.senderProfileImagePath || data?.profile_image_path || data?.profileImage || data?.profile_pic || data?.photo || data?.avatarUrl || data?.img || null;
-        if (incomingProfile) {
-          meta.profileImagePath = incomingProfile;
-          socketMetadata.set(socket.id, meta);
-          Logger.info('join_group', 'Persisted incoming profileImagePath from join_group', { socketId: socket.id, preview: String(incomingProfile).substring(0, 64) });
-        }
+      const safeIncomingProfile = getSafeProfileImageReference(incomingProfile);
+      if (safeIncomingProfile) {
+        meta.profileImagePath = safeIncomingProfile;
+        socketMetadata.set(socket.id, meta);
+        Logger.info('join_group', 'Persisted incoming profile image from join_group', { socketId: socket.id, preview: String(safeIncomingProfile).substring(0, 64) });
+      }
       } catch (err) {
         Logger.warn('join_group', 'Failed to persist incoming profile image to socketMetadata', { socketId: socket.id, err: err && err.message });
       }
@@ -5233,15 +5281,16 @@ io.on('connection', (socket) => {
         // Fetch fresh profile from DynamoDB if we have a userId
         const freshProfile = memberMeta.userId ? await getFreshUserProfile(memberMeta.userId) : null;
         
+        const safeMemberImage = getSafeProfileImageReference(memberMeta.profileImagePath);
         const memberData = {
           socketId: memberSocketId,
           userId: memberMeta.userId || '',
           userName: (freshProfile?.userName || memberMeta.userName || 'Unknown User'),
           avatarColor: (freshProfile?.avatarColor || memberMeta.avatarColor || '#128C7E'),
           avatarLetter: memberMeta.avatarLetter || 'U',
-          profileImagePath: memberMeta.profileImagePath || null,
-          profileImageUrl: freshProfile?.profileImageUrl || null,
-          senderProfileImagePath: memberMeta.profileImagePath || null,
+          profileImagePath: safeMemberImage,
+          profileImageUrl: freshProfile?.profileImageUrl || safeMemberImage || null,
+          senderProfileImagePath: safeMemberImage,
         };
         allMembers.push(memberData);
       }
@@ -5261,6 +5310,12 @@ io.on('connection', (socket) => {
       // ✅ NEW: Fetch fresh profile for the joiner to ensure latest profileImageUrl
       const joinerFreshProfile = data?.userId ? await getFreshUserProfile(data.userId) : null;
       
+      const safeJoinerImage =
+        joinerFreshProfile?.profileImageUrl ||
+        getSafeProfileImageReference(data?.profileImageUrl) ||
+        getSafeProfileImageReference(data?.profileImagePath) ||
+        getSafeProfileImageReference(data?.senderProfileImagePath) ||
+        null;
       io.to(`group_${groupName}`).emit('user_joined_group', {
         groupName,
         requestedGroupName,
@@ -5269,9 +5324,9 @@ io.on('connection', (socket) => {
         senderSocketId: socket.id,
         userId: data?.userId,
         userName: (joinerFreshProfile?.userName || data?.userName || 'Unknown User'),
-        profileImagePath: data?.profileImagePath || data?.senderProfileImagePath || null,
-        profileImageUrl: joinerFreshProfile?.profileImageUrl || null,
-        senderProfileImagePath: data?.senderProfileImagePath || data?.profileImagePath || null,
+        profileImagePath: safeJoinerImage,
+        profileImageUrl: joinerFreshProfile?.profileImageUrl || data?.profileImageUrl || safeJoinerImage || null,
+        senderProfileImagePath: safeJoinerImage,
         avatarColor: (joinerFreshProfile?.avatarColor || data?.avatarColor || '#128C7E'),
         avatarLetter: data?.avatarLetter || 'U',
         memberCount,
@@ -5477,14 +5532,22 @@ io.on('connection', (socket) => {
         cache.timestamp = Date.now();
 
         const senderMeta = socketMetadata.get(socket.id) || {};
+        const safeSenderGroupImage =
+          senderMeta.profileImageUrl ||
+          getSafeProfileImageReference(senderMeta.profileImagePath) ||
+          getSafeProfileImageReference(data?.senderProfileImagePath) ||
+          getSafeProfileImageReference(data?.profileImagePath) ||
+          getSafeProfileImageReference(data?.profile_image_path) ||
+          null;
         const messageData = {
           userId: senderMeta.userId || data?.userId || '',
           userName: (senderMeta.userName || data?.userName || 'Unknown User').substring(0, 50),
           message: message ? message.substring(0, 1000) : null,
           mediaUrl: mediaUrl || null,
           mediaType: mediaType || null,
-          senderProfileImagePath: senderMeta.profileImagePath || data?.senderProfileImagePath || data?.profileImagePath || data?.profile_image_path || null,
-          profileImagePath: senderMeta.profileImagePath || data?.profileImagePath || data?.senderProfileImagePath || data?.profile_image_path || null,
+          senderProfileImagePath: safeSenderGroupImage,
+          profileImagePath: safeSenderGroupImage,
+          profileImageUrl: senderMeta.profileImageUrl || safeSenderGroupImage || null,
           avatarColor: senderMeta.avatarColor || data?.avatarColor || '#128C7E',
           avatarLetter: (senderMeta.avatarLetter || data?.avatarLetter || (senderMeta.userName ? senderMeta.userName.charAt(0).toUpperCase() : 'U')).substring(0, 1),
           timestamp: Date.now(),
