@@ -2074,12 +2074,14 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const hasBio = typeof bio === 'string' && bio.trim().length > 0;
     const hasInterests = Array.isArray(req.body.interests);
     const hasProfileImageUrl = typeof profileImageUrl === 'string' && profileImageUrl.trim().length > 0;
+    const isClearingProfileImage = typeof profileImageUrl === 'string' && profileImageUrl.trim().length === 0;
 
     Logger.info('user/update', 'Received profile update payload', {
       userId,
       hasGender: !!gender,
       hasCountry: !!country,
       hasImage: hasProfileImageUrl,
+      isClearingImage: isClearingProfileImage,
       hasStatus,
       hasBio,
       hasInterests,
@@ -2156,6 +2158,10 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       if (normalizedProfileImageUrl) {
         updateData.profileImageUrl = normalizedProfileImageUrl;
       }
+    } else if (isClearingProfileImage) {
+      updateData.profileImageUrl = null;
+      updateData.profileImagePath = null;
+      updateData.pictureName = null;
     }
 
     const normalizedPictureName = normalizeStringInput(pictureName);

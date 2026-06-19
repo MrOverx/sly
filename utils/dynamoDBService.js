@@ -107,7 +107,8 @@ function buildUserItem(user) {
     throw new Error('User item requires userId');
   }
 
-  const emailLower = normalizeEmail(user.email);
+  const normalizedEmail = normalizeEmail(user.email) || normalizeEmail(user.emailLower);
+  const emailLower = normalizedEmail;
   const now = new Date().toISOString();
   const createdAt = toIso(user.createdAt) || now;
   const updatedAt = toIso(user.updatedAt) || now;
@@ -121,7 +122,7 @@ function buildUserItem(user) {
     itemType: 'USER',
     userId: String(user.userId),
     userName: user.userName || 'User',
-    email: user.email || null,
+    email: normalizedEmail,
     emailLower,
     authType: user.authType || 'LOCAL',
     isGuest: Boolean(user.isGuest),
@@ -331,6 +332,7 @@ async function upsertUser(userData) {
 
   if (!existing) {
     const emailLower = normalizeEmail(user.email);
+    const normalizedEmail = emailLower;
     user = {
       ...user,
       authType: user.authType || 'LOCAL',
@@ -338,6 +340,7 @@ async function upsertUser(userData) {
       userName: user.userName || 'User',
       profileComplete: Boolean(user.profileComplete),
       isActive: user.isActive !== false,
+      email: normalizedEmail,
       emailLower,
       createdAt: toIso(user.createdAt) || new Date().toISOString(),
       lastLogin: toIso(user.lastLogin) || new Date().toISOString(),
@@ -384,7 +387,11 @@ async function updateUserById(userId, updates) {
   const current = await getUserById(userId);
   if (!current) return null;
   const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
-  if (updates.email) merged.emailLower = normalizeEmail(updates.email);
+  if (updates.email) {
+    const normalizedEmail = normalizeEmail(updates.email);
+    merged.email = normalizedEmail;
+    merged.emailLower = normalizedEmail;
+  }
   const item = buildUserItem(merged);
   if (!TABLE_HAS_SORT_KEY) {
     delete item.SK;

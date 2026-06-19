@@ -245,8 +245,13 @@ function validateProfileUpdate(req, res, next) {
       if (typeof req.body.profileImageUrl !== 'string') {
         return sendError(res, 400, 'Invalid profileImageUrl value', 'VALIDATION_ERROR');
       }
-      if (String(req.body.profileImageUrl).trim().length > 0) {
-        sanitizedBody.profileImageUrl = String(req.body.profileImageUrl).trim();
+      const profileImageUrlValue = String(req.body.profileImageUrl);
+      const trimmedUrl = profileImageUrlValue.trim();
+      if (trimmedUrl.length > 0) {
+        sanitizedBody.profileImageUrl = trimmedUrl;
+      } else {
+        // Preserve explicit removal requests so backend can clear the image.
+        sanitizedBody.profileImageUrl = '';
       }
     }
     if (req.body.profileImagePath && String(req.body.profileImagePath).trim().length > 0) {
