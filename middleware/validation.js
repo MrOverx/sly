@@ -120,6 +120,7 @@ function validateProfileUpdate(req, res, next) {
       profileImageUrl,
       profileImagePath,
       pictureName,
+      birthDate,
       authType,
       email,
       isGuest,

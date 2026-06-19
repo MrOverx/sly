@@ -1,11 +1,11 @@
 {
   "name": "slyxyserver",
-  "version": "1.58.0",
+  "version": "1.59.0",
   "main": "ws_server.js",
   "scripts": {
     "start": "node ws_server.js",
     "dev": "nodemon ws_server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --runInBand"
   },
   "author": "",
   "license": "ISC",
@@ -21,11 +21,18 @@
     "express": "^5.2.1",
     "helmet": "^7.1.0",
     "multer": "^2.2.0",
-    "nodemailer": "^6.10.2",
+    "nodemailer": "^9.0.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
+    "node-mocks-http": "^1.11.0",
     "nodemon": "^3.1.11"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.js"],
+    "testPathIgnorePatterns": ["/tests/"]
   }
 }
