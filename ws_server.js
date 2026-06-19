@@ -820,7 +820,7 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
       return sendError(res, 401, 'Invalid or expired token', 'INVALID_TOKEN');
     }
 
-    if (!isDatabaseConnected()) {
+    if (!await isDatabaseConnected()) {
       return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
     }
 
@@ -973,7 +973,7 @@ app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, 
 
 // ========== NEW: REGISTER ENDPOINT ==========
 app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
   try {
@@ -1014,7 +1014,7 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
       userName: String(userName).trim(),
       email: normalizedEmail,
       passwordHash: hashedPassword,
-      authType: 'LOCAL',
+      authType: 'MAIL',
       isGuest: false,
       gender: gender ? String(gender).toLowerCase() : 'other',
       country: country || null,
@@ -1062,7 +1062,7 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
 
 // ========== NEW: LOGIN ENDPOINT ==========
 app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
   try {
@@ -1144,7 +1144,7 @@ const sendOtpLimiter = createRateLimiter('send-otp', 5, 15 * 60); // 5 per 15 mi
 const verifyOtpLimiter = createRateLimiter('verify-otp', 10, 15 * 60); // 10 per 15 minutes
 
 app.post('/auth/send-otp', sendOtpLimiter, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1196,7 +1196,7 @@ app.post('/auth/send-otp', sendOtpLimiter, asyncHandler(async (req, res) => {
 }));
 
 app.post('/auth/verify-otp', verifyOtpLimiter, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1230,7 +1230,7 @@ const forgotPasswordLimiter = createRateLimiter('forgot-password', 5, 15 * 60);
 const resetPasswordLimiter = createRateLimiter('reset-password', 5, 15 * 60);
 
 app.post('/auth/forgot-password', forgotPasswordLimiter, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1256,7 +1256,7 @@ app.post('/auth/forgot-password', forgotPasswordLimiter, asyncHandler(async (req
 }));
 
 app.post('/auth/reset-password', resetPasswordLimiter, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1309,7 +1309,7 @@ app.post('/auth/reset-password', resetPasswordLimiter, asyncHandler(async (req, 
 // ✅ CRITICAL: Frontend calls this to check if email is registered (for new/existing user detection)
 // Called on fresh Google login to determine if user is new or returning
 app.get('/auth/check-email', asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1367,7 +1367,7 @@ app.get('/auth/check-email', asyncHandler(async (req, res) => {
 // ✅ OPTIMIZED: Quick guest account creation with TTL cleanup
 const guestLimiter = createRateLimiter('guest-login', 20, 60); // 20 per minute
 app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
   try {
@@ -1439,7 +1439,7 @@ app.post('/cache/clear', (req, res) => {
 
 // ========== NEW: GET USER PROFILE ENDPOINT ==========
 async function handleGetUserProfile(req, res) {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1500,18 +1500,9 @@ app.get('/users/profile', async (req, res) => {
   return handleGetUserProfile(req, res);
 });
 
-app.get('/users/:userId', async (req, res) => {
-  req.params.userId = String(req.params.userId || '').trim();
-  return handleGetUserProfile(req, res);
-});
-
-app.get('/user/:userId', async (req, res) => {
-  req.params.userId = String(req.params.userId || '').trim();
-  return handleGetUserProfile(req, res);
-});
 // ========== NEW: SEARCH USERS ENDPOINT ==========
 app.get('/users/search', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -1525,7 +1516,6 @@ app.get('/users/search', async (req, res) => {
       return sendError(res, 400, 'Search query is required', 'VALIDATION_ERROR');
     }
 
-    // ✅ FIXED: Create case-insensitive regex for fuzzy search
     const users = await searchUsers(searchText);
 
     Logger.info('users/search', `Search results: ${users.length} users found`, {
@@ -1533,16 +1523,16 @@ app.get('/users/search', async (req, res) => {
       count: users.length,
     });
 
-    // ✅ PERFORMANCE: Cache results for repeated queries
     users.forEach(user => {
       if (user.userId) userCache.set(user.userId, user);
     });
 
-    // ✅ ENHANCED: Return all fields frontend needs
     return res.status(200).json(users.map((user) => ({
       userId: user.userId,
       userName: user.userName,
       email: user.email,
+      authType: user.authType,
+      isGuest: user.isGuest || false,
       gender: user.gender,
       country: user.country,
       status: user.status || null,
@@ -1560,9 +1550,19 @@ app.get('/users/search', async (req, res) => {
   }
 });
 
+app.get('/users/:userId', async (req, res) => {
+  req.params.userId = String(req.params.userId || '').trim();
+  return handleGetUserProfile(req, res);
+});
+
+app.get('/user/:userId', async (req, res) => {
+  req.params.userId = String(req.params.userId || '').trim();
+  return handleGetUserProfile(req, res);
+});
+
 // ========== NEW: SEND FRIEND REQUEST ENDPOINT ==========
 app.post('/friends/add', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1646,7 +1646,7 @@ app.post('/friends/add', async (req, res) => {
 
 // ========== NEW: ACCEPT FRIEND REQUEST ENDPOINT ==========
 app.post('/friends/request/:requestId/accept', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1720,7 +1720,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
 
 // ========== NEW: DENY FRIEND REQUEST ENDPOINT ==========
 app.post('/friends/request/:requestId/deny', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1767,7 +1767,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
 
 // ========== NEW: REMOVE FRIEND ENDPOINT ==========
 app.post('/friends/remove', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1808,7 +1808,7 @@ app.post('/friends/remove', async (req, res) => {
 
 // ========== NEW: GET FRIENDS LIST ENDPOINT ==========
 app.get('/friends/list', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1873,7 +1873,7 @@ app.get('/friends/list', async (req, res) => {
 
 // ========== NEW: GET INCOMING FRIEND REQUESTS ENDPOINT ==========
 app.get('/friends/requests/incoming', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -1926,7 +1926,7 @@ app.get('/friends/requests/incoming', async (req, res) => {
 
 // ========== NEW: GET OUTGOING FRIEND REQUESTS ENDPOINT ==========
 app.get('/friends/requests/outgoing', async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not available');
   }
 
@@ -2047,7 +2047,7 @@ function normalizeBooleanField(value) {
 
 // ========== NEW: UPDATE USER PROFILE ENDPOINT ==========
 app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdate, async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
   try {
@@ -2440,7 +2440,7 @@ app.get('/account/delete', (req, res) => {
 });
 
 app.post('/auth/verify-account', deleteAccountLimiter, async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -2463,7 +2463,7 @@ app.post('/auth/verify-account', deleteAccountLimiter, async (req, res) => {
 });
 
 app.post('/auth/delete-account', deleteAccountLimiter, async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -2480,7 +2480,7 @@ app.post('/auth/delete-account', deleteAccountLimiter, async (req, res) => {
 });
 
 app.delete('/auth/account/:userId', deleteAccountLimiter, async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
@@ -2496,7 +2496,7 @@ app.delete('/auth/account/:userId', deleteAccountLimiter, async (req, res) => {
 });
 
 app.delete('/user/:userId/delete', deleteAccountLimiter, async (req, res) => {
-  if (!isDatabaseConnected()) {
+  if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 

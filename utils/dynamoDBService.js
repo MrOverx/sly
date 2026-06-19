@@ -90,6 +90,15 @@ function normalizeProfileImageReference(value) {
   return stringValue;
 }
 
+function normalizeAuthType(value) {
+  if (value == null) return null;
+  const authType = String(value).trim();
+  if (!authType) return null;
+  const normalized = authType.toUpperCase();
+  const allowedTypes = ['GOOGLE_OAUTH', 'MAIL', 'LOCAL', 'GUEST'];
+  return allowedTypes.includes(normalized) ? normalized : null;
+}
+
 function buildProfileImageFields(user) {
   const profileImageUrl = normalizeProfileImageReference(user.profileImageUrl);
   const profileImagePath = normalizeProfileImageReference(user.profileImagePath);
@@ -145,14 +154,24 @@ function buildUserItem(user) {
   const emailVerifiedAt = user.emailVerifiedAt ? toIso(user.emailVerifiedAt) : null;
   const birthDate = toIso(user.birthDate) || null;
 
+  const authType = normalizeAuthType(user.authType) ??
+    (Boolean(user.isGuest)
+      ? 'GUEST'
+      : user.passwordHash
+        ? 'MAIL'
+        : normalizedEmail
+          ? 'MAIL'
+          : 'LOCAL');
+
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
     itemType: 'USER',
     userId: String(user.userId),
     userName: user.userName || 'User',
+    userNameLower: user.userName ? String(user.userName).trim().toLowerCase() : null,
     email: normalizedEmail,
     emailLower,
-    authType: user.authType || 'LOCAL',
+    authType,
     isGuest: Boolean(user.isGuest),
     gender: user.gender || 'other',
     country: user.country || null,
@@ -362,7 +381,14 @@ async function upsertUser(userData) {
     const normalizedEmail = emailLower;
     user = {
       ...user,
-      authType: user.authType || 'LOCAL',
+      authType: normalizeAuthType(user.authType) ??
+        (Boolean(user.isGuest)
+          ? 'GUEST'
+          : user.passwordHash
+            ? 'MAIL'
+            : normalizedEmail
+              ? 'MAIL'
+              : 'LOCAL'),
       isGuest: Boolean(user.isGuest),
       userName: user.userName || 'User',
       profileComplete: Boolean(user.profileComplete),
@@ -437,10 +463,10 @@ async function searchUsers(query, limit = 25) {
   if (!queryLower) return [];
 
   const expressionValues = {
-    ':userPrefix': USER_PREFIX,
+    ':userType': 'USER',
     ':query': queryLower,
   };
-  const filter = 'begins_with(PK, :userPrefix) AND (contains(userName, :query) OR contains(userId, :query) OR contains(emailLower, :query))';
+  const filter = 'itemType = :userType AND (contains(userNameLower, :query) OR contains(userName, :query) OR contains(userId, :query) OR contains(emailLower, :query))';
 
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
@@ -450,7 +476,7 @@ async function searchUsers(query, limit = 25) {
       '#status': 'status',
     },
     Limit: limit,
-    ProjectionExpression: 'userId, userName, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, createdAt, lastLogin, xp, itemType',
+    ProjectionExpression: 'userId, userName, userNameLower, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, createdAt, lastLogin, xp, itemType',
   }));
 
   return result.Items || [];
