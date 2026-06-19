@@ -4502,63 +4502,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ========== PROFILE UPDATE BROADCASTS ==========
-  // ✅ NEW: Broadcast profile updates to all connected peers
-  socket.on('profile_updated', (data) => {
-    try {
-      const senderMeta = socketMetadata.get(socket.id) || {};
-      const userId = senderMeta.userId;
-      
-      if (!userId) {
-        Logger.warn('profile_updated', 'User not registered', { socketId: socket.id });
-        return;
-      }
-
-      // Extract updated fields
-      const safeUpdateImagePath =
-        getSafeProfileImageReference(data.profileImagePath || data.senderProfileImagePath) ||
-        getSafeProfileImageReference(senderMeta.profileImagePath) ||
-        null;
-      const profileUpdate = {
-        userId,
-        userName: data.userName || senderMeta.userName,
-        avatarColor: data.avatarColor || senderMeta.avatarColor,
-        avatarLetter: data.avatarLetter || senderMeta.avatarLetter,
-        gender: data.gender || null,
-        country: data.country || null,
-        status: data.status ?? senderMeta.status ?? null,
-        bio: data.bio ?? senderMeta.bio ?? null,
-        interests: Array.isArray(data.interests) ? data.interests : (Array.isArray(senderMeta.interests) ? senderMeta.interests : []),
-        profileImagePath: safeUpdateImagePath,
-        profileImageUrl: data.profileImageUrl || senderMeta.profileImageUrl || safeUpdateImagePath || null,
-        timestamp: Date.now(),
-      };
-
-      // Update socket metadata with new profile data, including profileImageUrl
-      socketMetadata.set(socket.id, {
-        ...senderMeta,
-        userName: profileUpdate.userName,
-        avatarColor: profileUpdate.avatarColor,
-        avatarLetter: profileUpdate.avatarLetter,
-        profileImagePath: safeUpdateImagePath,
-        profileImageUrl: profileUpdate.profileImageUrl || senderMeta.profileImageUrl,
-        status: profileUpdate.status || senderMeta.status,
-        bio: profileUpdate.bio || senderMeta.bio,
-        interests: profileUpdate.interests || senderMeta.interests,
-      });
-
-      // Broadcast update to all connected clients
-      io.emit('profile_update', profileUpdate);
-
-      Logger.info('profile_updated', 'Profile update broadcasted', {
-        userId,
-        fields: Object.keys(profileUpdate).join(', '),
-      });
-    } catch (err) {
-      Logger.error('profile_updated', 'Error broadcasting profile update', err && err.message);
-    }
-  });
-
   // ========== DIRECT MESSAGE EVENTS ==========
   // ✅ NEW: Handle direct messages with proper routing and offline storage
   socket.on('send_direct_message', async (data) => {
