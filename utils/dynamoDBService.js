@@ -13,6 +13,8 @@ const {
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
+const MAX_PROFILE_IMAGE_URL_LENGTH = 20000;
+const MAX_INLINE_PROFILE_IMAGE_URL_LENGTH = 120 * 1024; // 120KB limit for persistent inline images
 
 const client = new DynamoDBClient({ region: AWS_REGION });
 const ddb = DynamoDBDocumentClient.from(client, {
@@ -76,6 +78,32 @@ function normalizeEmail(email) {
   return email.trim().toLowerCase();
 }
 
+function normalizeProfileImageReference(value) {
+  if (value == null) return null;
+  const stringValue = String(value).trim();
+  if (!stringValue) return null;
+  if (stringValue.length > MAX_PROFILE_IMAGE_URL_LENGTH) return null;
+  const lower = stringValue.toLowerCase();
+  if (lower.startsWith('data:') && stringValue.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
+    return null;
+  }
+  return stringValue;
+}
+
+function buildProfileImageFields(user) {
+  const profileImageUrl = normalizeProfileImageReference(user.profileImageUrl);
+  const profileImagePath = normalizeProfileImageReference(user.profileImagePath);
+
+  if (profileImageUrl && profileImagePath && profileImageUrl === profileImagePath) {
+    return { profileImageUrl, profileImagePath: null };
+  }
+
+  return {
+    profileImageUrl: profileImageUrl || profileImagePath || null,
+    profileImagePath: profileImagePath || null,
+  };
+}
+
 function buildItemKey(prefix, id, sk = METADATA_SK) {
   const key = {};
   const hashValue = prefix === USER_PREFIX && TABLE_HASH_KEY === 'userId' ? id : `${prefix}${id}`;
@@ -136,8 +164,7 @@ function buildUserItem(user) {
     profileComplete: Boolean(user.profileComplete),
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (user.userName ? user.userName.charAt(0).toUpperCase() : 'U'),
-    profileImageUrl: user.profileImageUrl || user.profileImagePath || null,
-    profileImagePath: user.profileImagePath || user.profileImageUrl || null,
+    ...buildProfileImageFields(user),
     pictureName: user.pictureName || null,
     passwordHash: user.passwordHash || null,
     emailVerified: Boolean(user.emailVerified),
@@ -851,6 +878,7 @@ module.exports = {
   findUserByLookup,
   upsertUser,
   createUser,
+  buildUserItem,
   updateUserById,
   deleteUserById,
   searchUsers,
@@ -877,4 +905,6 @@ module.exports = {
   deleteBlocksForUser,
   deleteReportsForUserAndReporter,
   getUserStats,
+  normalizeProfileImageReference,
+  buildProfileImageFields,
 };

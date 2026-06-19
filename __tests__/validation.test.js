@@ -29,4 +29,30 @@ describe('validateProfileUpdate', () => {
     expect(res.statusCode).toBe(400);
     expect(res._getData()).toContain('Invalid profile data');
   });
+
+  it('should reject profileImageUrl that exceeds the maximum string length', () => {
+    const oversizedUrl = 'http://' + 'a'.repeat(20001);
+    const result = runValidation({ profileImageUrl: oversizedUrl });
+    expect(result.nextCalled).toBe(false);
+    expect(result.res.statusCode).toBe(400);
+    expect(result.res._getData()).toContain('profileImageUrl cannot exceed 20000 characters');
+  });
+
+  it('should reject inline profileImageUrl data URIs larger than the allowed inline limit', () => {
+    const dataUriPrefix = 'data:image/png;base64,';
+    const oversizedInline = dataUriPrefix + 'A'.repeat(120 * 1024 + 1);
+    const result = runValidation({ profileImageUrl: oversizedInline });
+    expect(result.nextCalled).toBe(false);
+    expect(result.res.statusCode).toBe(400);
+    expect(result.res._getData()).toContain('Inline profile image payload exceeds maximum allowed size');
+  });
+
+  it('should reject inline profileImagePath data URIs larger than the allowed inline limit', () => {
+    const dataUriPrefix = 'data:image/jpeg;base64,';
+    const oversizedInline = dataUriPrefix + 'A'.repeat(120 * 1024 + 1);
+    const result = runValidation({ profileImagePath: oversizedInline });
+    expect(result.nextCalled).toBe(false);
+    expect(result.res.statusCode).toBe(400);
+    expect(result.res._getData()).toContain('Inline profile image payload exceeds maximum allowed size');
+  });
 });

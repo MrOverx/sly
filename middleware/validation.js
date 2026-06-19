@@ -10,6 +10,9 @@
 const { Logger } = require('../utils/logger');
 const { sendError } = require('../utils/responseHandler');
 
+const MAX_PROFILE_IMAGE_URL_LENGTH = 20000;
+const MAX_INLINE_PROFILE_IMAGE_URL_LENGTH = 120 * 1024; // 120KB limit for persistent inline images
+
 /**
  * Validate authentication request body
  * Required: idToken or (email + password)
@@ -248,6 +251,14 @@ function validateProfileUpdate(req, res, next) {
       }
       const profileImageUrlValue = String(req.body.profileImageUrl);
       const trimmedUrl = profileImageUrlValue.trim();
+      const lowerProfileImageUrl = trimmedUrl.toLowerCase();
+      if (lowerProfileImageUrl.startsWith('data:')) {
+        if (trimmedUrl.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
+          return sendError(res, 400, 'Inline profile image payload exceeds maximum allowed size', 'VALIDATION_ERROR');
+        }
+      } else if (trimmedUrl.length > MAX_PROFILE_IMAGE_URL_LENGTH) {
+        return sendError(res, 400, 'profileImageUrl cannot exceed 20000 characters', 'VALIDATION_ERROR');
+      }
       if (trimmedUrl.length > 0) {
         sanitizedBody.profileImageUrl = trimmedUrl;
       } else {
@@ -255,8 +266,23 @@ function validateProfileUpdate(req, res, next) {
         sanitizedBody.profileImageUrl = '';
       }
     }
-    if (req.body.profileImagePath && String(req.body.profileImagePath).trim().length > 0) {
-      sanitizedBody.profileImagePath = String(req.body.profileImagePath);
+    if (req.body.profileImagePath != null) {
+      if (typeof req.body.profileImagePath !== 'string') {
+        return sendError(res, 400, 'Invalid profileImagePath value', 'VALIDATION_ERROR');
+      }
+      const profileImagePathValue = String(req.body.profileImagePath);
+      const trimmedPath = profileImagePathValue.trim();
+      const lowerProfileImagePath = trimmedPath.toLowerCase();
+      if (lowerProfileImagePath.startsWith('data:')) {
+        if (trimmedPath.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
+          return sendError(res, 400, 'Inline profile image payload exceeds maximum allowed size', 'VALIDATION_ERROR');
+        }
+      } else if (trimmedPath.length > MAX_PROFILE_IMAGE_URL_LENGTH) {
+        return sendError(res, 400, 'profileImagePath cannot exceed 20000 characters', 'VALIDATION_ERROR');
+      }
+      if (trimmedPath.length > 0) {
+        sanitizedBody.profileImagePath = trimmedPath;
+      }
     }
     if (req.body.pictureName && String(req.body.pictureName).trim().length > 0) {
       sanitizedBody.pictureName = String(req.body.pictureName);
