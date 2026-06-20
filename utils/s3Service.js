@@ -1,6 +1,6 @@
 const path = require('path');
 const crypto = require('crypto');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET;
@@ -56,6 +56,64 @@ function getPublicUrl(key) {
   return `https://${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${encodedKey}`;
 }
 
+function getS3ObjectKeyFromUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+
+  const candidate = url.trim();
+  const normalizedPublicUrl = AWS_S3_PUBLIC_URL ? AWS_S3_PUBLIC_URL.replace(/\/+$/, '') : null;
+
+  if (normalizedPublicUrl && candidate.startsWith(normalizedPublicUrl)) {
+    return candidate.slice(normalizedPublicUrl.length).replace(/^\/+/, '');
+  }
+
+  try {
+    const parsedUrl = new URL(candidate);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const pathname = parsedUrl.pathname.replace(/^\/+/, '');
+
+    if (AWS_S3_BUCKET && hostname === `${AWS_S3_BUCKET}.s3.amazonaws.com`) {
+      return pathname;
+    }
+
+    if (AWS_S3_BUCKET && hostname === `${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com`) {
+      return pathname;
+    }
+
+    if (AWS_S3_BUCKET && hostname === `s3.${AWS_REGION}.amazonaws.com` && pathname.startsWith(`${AWS_S3_BUCKET}/`)) {
+      return pathname.slice(AWS_S3_BUCKET.length + 1);
+    }
+
+    if (AWS_S3_BUCKET && hostname === 's3.amazonaws.com' && pathname.startsWith(`${AWS_S3_BUCKET}/`)) {
+      return pathname.slice(AWS_S3_BUCKET.length + 1);
+    }
+
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function deleteProfileImageFromS3(url) {
+  if (!AWS_S3_BUCKET) {
+    throw new Error('Cannot delete from S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable deletes.');
+  }
+
+  const key = getS3ObjectKeyFromUrl(url);
+  if (!key) {
+    throw new Error(`Unable to derive S3 object key from URL: ${url}`);
+  }
+
+  const command = new DeleteObjectCommand({
+    Bucket: AWS_S3_BUCKET,
+    Key: key,
+  });
+
+  await s3Client.send(command);
+  return true;
+}
+
 async function uploadProfileImageToS3(buffer, originalName, contentType) {
   if (!AWS_S3_BUCKET) {
     throw new Error('Cannot upload to S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable uploads.');
@@ -105,5 +163,6 @@ async function uploadProfileImageToS3(buffer, originalName, contentType) {
 
 module.exports = {
   uploadProfileImageToS3,
+  deleteProfileImageFromS3,
   isS3Configured,
 };

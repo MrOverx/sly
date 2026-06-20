@@ -78,7 +78,7 @@ const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
-const { uploadProfileImageToS3, isS3Configured } = require('./utils/s3Service');
+const { uploadProfileImageToS3, deleteProfileImageFromS3, isS3Configured } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
 
@@ -1925,8 +1925,22 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       updateData.avatarColor = normalizedAvatarColor;
     }
 
+    const normalizedProfileImageUrl = normalizeStringInput(profileImageUrl);
+    const shouldDeleteOldProfileImage = existingUser.profileImageUrl && (
+      isClearingProfileImage ||
+      (normalizedProfileImageUrl && normalizedProfileImageUrl !== existingUser.profileImageUrl)
+    );
+
+    if (shouldDeleteOldProfileImage) {
+      try {
+        await deleteProfileImageFromS3(existingUser.profileImageUrl);
+        Logger.info('user/update', 'Deleted previous profile image from S3', { userId, previousUrl: existingUser.profileImageUrl });
+      } catch (deleteErr) {
+        Logger.warn('user/update', 'Unable to delete previous profile image from S3', { userId, previousUrl: existingUser.profileImageUrl, error: deleteErr?.message || deleteErr });
+      }
+    }
+
     if (hasProfileImageUrl) {
-      const normalizedProfileImageUrl = normalizeStringInput(profileImageUrl);
       if (normalizedProfileImageUrl) {
         updateData.profileImageUrl = normalizedProfileImageUrl;
       }
@@ -1966,7 +1980,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       Logger.info('user/update', '✅ Profile marked as complete', { userId });
     }
 
-    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
+    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'profileImagePath', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
     const safeUpdateData = {};
     for (const key of safeFields) {
       if (Object.prototype.hasOwnProperty.call(updateData, key)) {
