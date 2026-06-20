@@ -78,7 +78,7 @@ const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
-const { uploadProfileImageToS3, deleteProfileImageFromS3, isS3Configured } = require('./utils/s3Service');
+const { uploadProfileImageToS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
 
@@ -1945,18 +1945,29 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     }
 
     const normalizedProfileImageUrl = normalizeStringInput(profileImageUrl);
-    const shouldDeleteOldProfileImage = existingUser.profileImageUrl && (
+    const oldProfileImageUrl = existingUser.profileImageUrl;
+    const shouldDeleteOldProfileImage = oldProfileImageUrl && (
       isClearingProfileImage ||
-      (normalizedProfileImageUrl && normalizedProfileImageUrl !== existingUser.profileImageUrl)
+      (normalizedProfileImageUrl && normalizedProfileImageUrl !== oldProfileImageUrl)
     );
+    const oldProfileImageIsManaged = oldProfileImageUrl && isS3Url(oldProfileImageUrl);
 
-    if (shouldDeleteOldProfileImage) {
+    if (shouldDeleteOldProfileImage && oldProfileImageIsManaged) {
       try {
-        await deleteProfileImageFromS3(existingUser.profileImageUrl);
-        Logger.info('user/update', 'Deleted previous profile image from S3', { userId, previousUrl: existingUser.profileImageUrl });
+        await deleteProfileImageFromS3(oldProfileImageUrl);
+        Logger.info('user/update', 'Deleted previous profile image from S3', { userId, previousUrl: oldProfileImageUrl });
       } catch (deleteErr) {
-        Logger.warn('user/update', 'Unable to delete previous profile image from S3', { userId, previousUrl: existingUser.profileImageUrl, error: deleteErr?.message || deleteErr });
+        Logger.warn('user/update', 'Unable to delete previous profile image from S3', {
+          userId,
+          previousUrl: oldProfileImageUrl,
+          error: deleteErr?.message || deleteErr,
+        });
       }
+    } else if (shouldDeleteOldProfileImage && oldProfileImageUrl) {
+      Logger.info('user/update', 'Skipping S3 delete for non-managed profile image URL', {
+        userId,
+        previousUrl: oldProfileImageUrl,
+      });
     }
 
     if (hasProfileImageUrl) {

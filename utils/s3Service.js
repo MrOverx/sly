@@ -102,6 +102,10 @@ function getS3ObjectKeyFromUrl(url) {
   }
 }
 
+function isS3Url(url) {
+  return Boolean(getS3ObjectKeyFromUrl(url));
+}
+
 async function deleteProfileImageFromS3(url) {
   if (!AWS_S3_BUCKET) {
     throw new Error('Cannot delete from S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable deletes.');
@@ -109,7 +113,10 @@ async function deleteProfileImageFromS3(url) {
 
   const key = getS3ObjectKeyFromUrl(url);
   if (!key) {
-    throw new Error(`Unable to derive S3 object key from URL: ${url}`);
+    console.warn(
+      `[s3Service] Skipping delete because URL is not recognized as a managed S3 object: ${url}`,
+    );
+    return false;
   }
 
   const command = new DeleteObjectCommand({
@@ -172,4 +179,5 @@ module.exports = {
   uploadProfileImageToS3,
   deleteProfileImageFromS3,
   isS3Configured,
+  isS3Url,
 };
