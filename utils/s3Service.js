@@ -6,6 +6,7 @@ const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || '
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET;
 const AWS_S3_PROFILE_FOLDER = process.env.AWS_S3_PROFILE_FOLDER || 'profiles';
 const AWS_S3_PUBLIC_URL = process.env.AWS_S3_PUBLIC_URL || null;
+const AWS_S3_ACL = process.env.AWS_S3_ACL || null;
 
 const s3Client = new S3Client({ region: AWS_REGION });
 
@@ -65,17 +66,37 @@ async function uploadProfileImageToS3(buffer, originalName, contentType) {
   }
 
   const key = getS3ObjectKey(originalName);
-  const command = new PutObjectCommand({
+  const commandParams = {
     Bucket: AWS_S3_BUCKET,
     Key: key,
     Body: buffer,
     ContentType: contentType || 'application/octet-stream',
-    ACL: 'public-read',
     CacheControl: 'public, max-age=604800',
     ContentDisposition: 'inline',
-  });
+  };
 
-  await s3Client.send(command);
+  if (AWS_S3_ACL) {
+    commandParams.ACL = AWS_S3_ACL;
+  }
+
+  const sendUploadCommand = async (params) => {
+    const command = new PutObjectCommand(params);
+    return await s3Client.send(command);
+  };
+
+  try {
+    await sendUploadCommand(commandParams);
+  } catch (error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    if (AWS_S3_ACL && message.includes('acl') && message.includes('not allow')) {
+      console.warn('[s3Service] ACL rejected by bucket, retrying upload without ACL');
+      delete commandParams.ACL;
+      await sendUploadCommand(commandParams);
+    } else {
+      throw error;
+    }
+  }
+
   return {
     key,
     url: getPublicUrl(key),
