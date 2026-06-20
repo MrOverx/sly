@@ -374,6 +374,14 @@ async function upsertUser(userData) {
 
   await loadTableSchema();
   const existing = await getUserById(userData.userId);
+
+  if (userData.email) {
+    const emailCollisionUser = await getUserByEmail(userData.email);
+    if (emailCollisionUser && emailCollisionUser.userId !== userData.userId) {
+      throw new Error('EMAIL_CONFLICT');
+    }
+  }
+
   let user = existing ? { ...existing, ...userData } : { ...userData };
 
   if (!existing) {
@@ -439,6 +447,15 @@ async function createUser(userData) {
 async function updateUserById(userId, updates) {
   const current = await getUserById(userId);
   if (!current) return null;
+
+  if (updates.email) {
+    const normalizedEmail = normalizeEmail(updates.email);
+    const existingByEmail = await getUserByEmail(normalizedEmail);
+    if (existingByEmail && existingByEmail.userId !== userId) {
+      throw new Error('EMAIL_CONFLICT');
+    }
+  }
+
   const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
   if (updates.email) {
     const normalizedEmail = normalizeEmail(updates.email);

@@ -71,57 +71,6 @@ const {
 
 const isDatabaseConnected = isDbConnected;
 
-async function fetchGoogleTokenInfo(idToken) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'www.googleapis.com',
-      path: `/oauth2/v3/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => {
-        body += chunk;
-      });
-      res.on('end', () => {
-        try {
-          const tokenData = JSON.parse(body);
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(tokenData);
-          } else {
-            const error = new Error(`Google token validation failed: ${res.statusCode}`);
-            error.statusCode = res.statusCode;
-            error.responseBody = tokenData;
-            reject(error);
-          }
-        } catch (parseErr) {
-          reject(parseErr);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-// Google OAuth configuration
-const DEFAULT_GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const configuredGoogleClientIds = process.env.GOOGLE_CLIENT_IDS
-  ? process.env.GOOGLE_CLIENT_IDS.split(',').map(id => id.trim()).filter(Boolean)
-  : [];
-const GOOGLE_CLIENT_IDS = Array.from(
-  new Set([
-    ...(process.env.GOOGLE_CLIENT_ID ? [process.env.GOOGLE_CLIENT_ID.trim()] : []),
-    ...configuredGoogleClientIds,
-    DEFAULT_GOOGLE_CLIENT_ID,
-  ])
-);
-
 // ✅ Import optimization utilities
 const { Logger } = require('./utils/logger');
 const { sendError, sendSuccess } = require('./utils/responseHandler');
@@ -788,188 +737,11 @@ app.get('/room/by-invite/:code', (req, res) => {
 });
 
 // ✅ Create rate limiters for auth endpoints
-const validateTokenLimiter = createRateLimiter('validate-token', 10, 15 * 60); // 10 per 15 minutes
 const registerLimiter = createRateLimiter('register', 3, 60 * 60); // 3 per hour
 const loginLimiter = createRateLimiter('login', 5, 15 * 60); // 5 per 15 minutes
 const deleteAccountLimiter = createRateLimiter('delete-account', 3, 60 * 60); // 3 per hour
 
-// Google OAuth Token Validation Endpoint (No Firebase required)
-app.post('/auth/validate-token', validateTokenLimiter, asyncHandler(async (req, res) => {
-  try {
-    const { idToken, googleUser, googleUserData } = req.body;
-    const userMeta = googleUser || googleUserData;
 
-    if (!idToken) {
-      return sendError(res, 400, 'ID token is required');
-    }
-
-    // Validate token with Google's API
-    let tokenData;
-    try {
-      tokenData = await fetchGoogleTokenInfo(idToken);
-    } catch (fetchErr) {
-      Logger.warn(
-        'oauth/validate',
-        'Token validation failed',
-        {
-          message: fetchErr.message,
-          statusCode: fetchErr.statusCode,
-          responseBody: fetchErr.responseBody,
-        }
-      );
-      return sendError(res, 401, 'Invalid or expired token', 'INVALID_TOKEN');
-    }
-
-    if (!await isDatabaseConnected()) {
-      return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
-    }
-
-    const tokenAudiences = Array.isArray(tokenData.aud) ? tokenData.aud : [tokenData.aud];
-    const tokenAuthorizedParty = tokenData.azp ? [tokenData.azp] : [];
-    const tokenIssuer = tokenData.iss;
-    const validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
-
-    const validatedAudiences = Array.from(
-      new Set([
-        ...tokenAudiences.filter(Boolean),
-        ...tokenAuthorizedParty.filter(Boolean),
-      ])
-    );
-
-    const audienceMatches = validatedAudiences.some(aud => GOOGLE_CLIENT_IDS.includes(aud));
-    if (!audienceMatches) {
-      Logger.warn('oauth/validate', 'Google ID token audience mismatch', {
-        expected: GOOGLE_CLIENT_IDS,
-        actualAud: tokenData.aud,
-        actualAzp: tokenData.azp,
-      });
-      return sendError(res, 401, 'Invalid token audience', 'INVALID_TOKEN_AUDIENCE');
-    }
-
-    if (!validIssuers.includes(tokenIssuer)) {
-      Logger.warn('oauth/validate', 'Google ID token issuer invalid', {
-        issuer: tokenIssuer,
-      });
-      return sendError(res, 401, 'Invalid token issuer', 'INVALID_TOKEN_ISSUER');
-    }
-
-    Logger.info('oauth/validate', '✅ Token validated successfully', {
-      userId: tokenData.sub,
-      emailVerified: tokenData.email_verified,
-    });
-
-    // ✅ Save or update user in DynamoDB after Google validation
-    const userId = tokenData.sub;
-    Logger.info('oauth/validate', '🔍 Token data sub', { sub: tokenData.sub, type: typeof tokenData.sub });
-    const userParams = {
-      userId,
-      userName: userMeta?.displayName || tokenData.name || 'User',
-      email: tokenData.email || userMeta?.email || null,
-      authType: 'GOOGLE_OAUTH',
-      isGuest: false,
-      profileImageUrl: tokenData.picture || userMeta?.photoUrl || null,
-      lastLogin: new Date(),
-      updatedAt: new Date(),
-    };
-
-    let savedUser = null;
-    let isExistingUser = false;
-
-    try {
-      let fullExistingUser = null;
-      const userEmail = userParams.email?.toLowerCase();
-
-      if (userEmail) {
-        fullExistingUser = await getUserByEmail(userEmail);
-        if (fullExistingUser) {
-          Logger.info('oauth/validate', '✅ Existing user found by email', {
-            userId: fullExistingUser.userId,
-            email: userEmail,
-            profileComplete: fullExistingUser.profileComplete,
-          });
-        }
-      }
-
-      if (!fullExistingUser && userId) {
-        fullExistingUser = await getUserById(userId);
-        if (fullExistingUser) {
-          Logger.info('oauth/validate', '✅ Existing user found by userId', {
-            userId,
-            email: fullExistingUser.email,
-            profileComplete: fullExistingUser.profileComplete,
-          });
-        }
-      }
-
-      const updateData = {
-        userName: userParams.userName,
-        email: userParams.email,
-        authType: userParams.authType,
-        isGuest: userParams.isGuest,
-        profileImageUrl: userParams.profileImageUrl,
-        lastLogin: userParams.lastLogin,
-        updatedAt: userParams.updatedAt,
-      };
-
-      Logger.debug('oauth/validate', '🔄 Upserting user to DynamoDB', { userId });
-
-      savedUser = await upsertUser({
-        userId,
-        ...updateData,
-        gender: 'other',
-        country: null,
-        avatarColor: '#128C7E',
-        profileComplete: false,
-        createdAt: new Date(),
-      });
-
-      Logger.info('oauth/validate', '✅ User upserted successfully', { userId });
-
-      isExistingUser = fullExistingUser !== null;
-
-      Logger.info('oauth/validate', '📊 User Status', {
-        userId,
-        email: userEmail,
-        isExistingUser,
-        profileComplete: savedUser?.profileComplete || false,
-        hasGender: !!savedUser?.gender,
-        hasCountry: !!savedUser?.country,
-      });
-
-      const userResponse = {
-        userId: savedUser.userId,
-        userName: savedUser.userName,
-        email: savedUser.email,
-        gender: savedUser.gender || 'other',
-        country: savedUser.country || null,
-        status: savedUser.status || null,
-        bio: savedUser.bio || null,
-        interests: Array.isArray(savedUser.interests) ? savedUser.interests : [],
-        birthDate: savedUser.birthDate || null,
-        avatarColor: savedUser.avatarColor || '#128C7E',
-        profileImageUrl: savedUser.profileImageUrl || null,
-        profileImagePath: savedUser.profileImagePath || null,
-        profileComplete: savedUser.profileComplete === true,
-        xp: getUserXp(savedUser),
-        authType: savedUser.authType,
-        isGuest: savedUser.isGuest || false,
-        lastLogin: savedUser.lastLogin,
-        createdAt: savedUser.createdAt,
-      };
-
-      return sendSuccess(res, {
-        isExistingUser,
-        user: userResponse,
-      }, `Token validated - ${isExistingUser ? 'Existing' : 'New'} user`);
-    } catch (dbErr) {
-      Logger.error('oauth/validate', 'Error upserting user to DynamoDB', dbErr?.message);
-      return sendError(res, 500, 'Database error', { details: dbErr?.message });
-    }
-  } catch (err) {
-    Logger.error('oauth/validate', 'Error validating token', err && err.message);
-    return sendError(res, 500, 'Token validation error', { details: err?.message });
-  }
-}));
 
 // ========== NEW: REGISTER ENDPOINT ==========
 app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(async (req, res) => {
@@ -1307,7 +1079,7 @@ app.post('/auth/reset-password', resetPasswordLimiter, asyncHandler(async (req, 
 
 // ========== NEW: CHECK EMAIL EXISTS ENDPOINT ==========
 // ✅ CRITICAL: Frontend calls this to check if email is registered (for new/existing user detection)
-// Called on fresh Google login to determine if user is new or returning
+// Called when checking email during signup/login flow to determine if a user exists
 app.get('/auth/check-email', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
