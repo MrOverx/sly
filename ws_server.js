@@ -23,9 +23,9 @@ if (!envPathUsed) {
 }
 
 if (envPathUsed) {
-  console.log(`🔐 Loaded environment variables from: ${envPathUsed}`);
+  Logger.info('env', `Loaded environment variables from: ${envPathUsed}`);
 } else {
-  console.log('⚠️ No .env found in backend search paths; relying on process environment only');
+  Logger.warn('env', 'No .env found in backend search paths; relying on process environment only');
 }
 
 const express = require('express');
@@ -201,13 +201,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // Log blocked origins for debugging
-    try {
-      Logger.warn('cors', `Blocked origin: ${origin}`);
-    } catch (e) {
-      console.warn('cors: Blocked origin', origin);
-    }
-
+    Logger.warn('cors', `Blocked origin: ${origin}`);
     return callback(new Error('CORS policy: Origin not allowed'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
@@ -306,7 +300,7 @@ const DYNAMODB_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION
 const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || process.env.AWS_DYNAMODB_TABLE || 'oververseDB';
 
 if (!DYNAMODB_REGION || !DYNAMODB_TABLE) {
-  console.error('❌ AWS_REGION and DYNAMODB_TABLE must be configured in the environment.');
+  Logger.error('config', 'AWS_REGION and DYNAMODB_TABLE must be configured in the environment.');
   process.exit(1);
 }
 
@@ -356,22 +350,6 @@ const CONFIG = {
 
 let serverStarted = false;
 let isGracefulShutdown = false;
-
-process.on('unhandledRejection', (reason, promise) => {
-  Logger.error('process', 'Unhandled promise rejection', {
-    reason: reason?.toString?.() || reason,
-    promise: promise?.toString?.() || 'unknown',
-  });
-});
-
-process.on('uncaughtException', (err) => {
-  Logger.error('process', 'Uncaught exception', err?.message || err);
-  console.error(err);
-  if (!isGracefulShutdown) {
-    isGracefulShutdown = true;
-    process.exit(1);
-  }
-});
 
 function startServer() {
   if (serverStarted) return;
@@ -2421,7 +2399,29 @@ function startOfflineMessagesCleanup() {
     }
   }, 60 * 60 * 1000); // run hourly
 }
+
+function startSocketRateLimitCleanup() {
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      let removedCount = 0;
+      for (const [socketId, record] of rateLimitMap.entries()) {
+        if (!record || now > record.resetTime + RATE_LIMIT_CONFIG.checkIntervalMs * 2) {
+          rateLimitMap.delete(socketId);
+          removedCount++;
+        }
+      }
+      if (removedCount > 0) {
+        Logger.debug('rateLimit', 'Cleaned stale socket rate limit records', { removedCount });
+      }
+    } catch (e) {
+      Logger.warn('rateLimit', 'Error during socket rate limit cleanup', { err: e && e.message });
+    }
+  }, 5 * 60 * 1000); // run every 5 minutes
+}
+
 startOfflineMessagesCleanup();
+startSocketRateLimitCleanup();
 // Star gifting state: counts per room or match and one-time gift tracking
 const starCounts = new Map(); // key -> number (roomId or matchId)
 const oneTimeGifts = new Set(); // `${socketId}:${key}` to prevent duplicate gifts
@@ -4478,15 +4478,13 @@ io.on('connection', (socket) => {
     // Safety timeout: guarantee response within 10 seconds
     const timeoutId = setTimeout(() => {
       if (!callbackCalled) {
-        console.error('❌ [create_space] TIMEOUT: Callback not called after 10s');
+        Logger.error('create_space', 'Timeout waiting for callback response', { socketId: socket.id });
         callbackOnce({ success: false, error: 'Server operation timed out' });
       }
     }, 10000);
 
     try {
-      console.log('🔵 [create_space] Event received from socket:', socket.id);
-      console.log('📤 [create_space] Payload:', JSON.stringify(data, null, 2));
-      console.log('✓ [create_space] Callback present?', typeof callback === 'function');
+      Logger.debug('create_space', 'Event received', { socketId: socket.id, hasCallback: typeof callback === 'function' });
       
       const incomingUser = data?.user || null;
       const incomingUserId = normalizeId(data.userId || incomingUser?.userId || socket.data?.userId);
@@ -4495,11 +4493,10 @@ io.on('connection', (socket) => {
       const spaceName = String(data.spaceName || 'Voice Space').substring(0, 100);
       const description = String(data.description || '').substring(0, 300);
 
-      console.log('📋 [create_space] Extracted userId:', userId);
-      console.log('📋 [create_space] Extracted spaceName:', spaceName);
+      Logger.debug('create_space', 'Extracted create space details', { socketId: socket.id, userId, spaceName });
 
       if (!userId) {
-        console.log('❌ [create_space] Missing userId, sending error callback');
+        Logger.warn('create_space', 'Missing userId in create_space payload', { socketId: socket.id });
         clearTimeout(timeoutId);
         callbackOnce({ success: false, error: 'Missing userId' });
         return;
@@ -4540,7 +4537,7 @@ io.on('connection', (socket) => {
         (space) => String(space.hostId) === userId,
       );
       if (existingHostSpace) {
-        console.log('⚠️ [create_space] User already has active space:', existingHostSpace.spaceId);
+        Logger.info('create_space', 'User already has an active voice space', { socketId: socket.id, spaceId: existingHostSpace.spaceId });
         clearTimeout(timeoutId);
         callbackOnce({
           success: false,
@@ -4549,9 +4546,9 @@ io.on('connection', (socket) => {
         return;
       }
 
-      console.log('🔄 [create_space] Calling resolveUserProfileMetadata for userId:', userId);
+      Logger.debug('create_space', 'Resolving user profile metadata', { socketId: socket.id, userId });
       const profileMeta = await resolveUserProfileMetadata(userId, userMeta, userNamePayload || 'Host', '#8A2BE2', 'H');
-      console.log('✅ [create_space] profileMeta resolved:', profileMeta?.userName);
+      Logger.debug('create_space', 'Resolved user profile metadata', { socketId: socket.id, userId, resolvedName: profileMeta?.userName });
 
       // Generate unique spaceId
       const spaceId = `space_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -4595,9 +4592,8 @@ io.on('connection', (socket) => {
       // Broadcast updated spaces list to ALL clients
       broadcastActiveSpaces();
 
-      console.log('📞 [create_space] About to send success callback for spaceId:', spaceId);
+      Logger.debug('create_space', 'Sending success callback', { socketId: socket.id, spaceId });
       clearTimeout(timeoutId);
-      console.log('✅ [create_space] Sending success response');
       callbackOnce({
         success: true,
         space: {
@@ -4613,17 +4609,15 @@ io.on('connection', (socket) => {
         },
         assignedRole: 'Host',
       });
-      console.log('✅ [create_space] Callback completed for spaceId:', spaceId);
+      Logger.debug('create_space', 'Callback completed', { socketId: socket.id, spaceId });
     } catch (error) {
-      console.error('❌ [create_space] ERROR CAUGHT:', {
+      Logger.error('create_space', 'Error creating space', {
         message: error.message,
         stack: error.stack,
         code: error.code,
         name: error.name,
       });
-      Logger.error('create_space', 'Error creating space', error.message);
       clearTimeout(timeoutId);
-      console.log('❌ [create_space] Sending error callback:', error.message);
       callbackOnce({ success: false, error: error.message });
     }
   });
