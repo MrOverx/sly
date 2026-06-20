@@ -211,7 +211,7 @@ const corsOptions = {
     return callback(new Error('CORS policy: Origin not allowed'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-User-Id'],
   exposedHeaders: ['Content-Type'],
   credentials: true,
   preflightContinue: false,
