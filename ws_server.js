@@ -243,16 +243,20 @@ app.post('/upload', upload.single('profileImage'), async (req, res) => {
     return sendError(res, 400, 'No image file provided', 'UPLOAD_FAILED');
   }
 
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+
   try {
     Logger.info('upload', 'Uploading profile image to S3', {
       filename: req.file.originalname || `profile-${Date.now()}`,
       size: req.file.size,
+      userId,
     });
 
     const uploaded = await uploadProfileImageToS3(
       req.file.buffer,
       req.file.originalname || `profile-${Date.now()}`,
       req.file.mimetype || 'application/octet-stream',
+      userId,
     );
 
     Logger.info('upload', 'Profile image uploaded successfully', {
@@ -555,8 +559,23 @@ async function resolveUserProfileMetadata(userId, userMeta = {}, fallbackName = 
   const userName = freshProfile?.userName || userMeta.userName || fallbackName;
   const avatarLetter = freshProfile?.userName ? freshProfile.userName.charAt(0).toUpperCase() : (userMeta.avatarLetter || defaultInitial);
   const avatarColor = freshProfile?.avatarColor || userMeta.avatarColor || defaultColor;
-  const profileImageUrl = freshProfile?.profileImageUrl || userMeta.profileImageUrl || null;
-  const profileImagePath = getSafeProfileImageReference(freshProfile?.profileImageUrl || userMeta.profileImagePath || userMeta.profileImageUrl || null);
+
+  const freshProfileImageUrl = getSafeProfileImageReference(freshProfile?.profileImageUrl);
+  const freshProfileImagePath = getSafeProfileImageReference(freshProfile?.profileImagePath);
+  const freshProfileHasImage = !!freshProfileImageUrl || !!freshProfileImagePath;
+
+  const profileImageUrl = freshProfileHasImage
+    ? (freshProfileImageUrl || freshProfileImagePath || null)
+    : (freshProfile
+      ? null
+      : (userMeta.profileImageUrl || getSafeProfileImageReference(userMeta.profileImagePath) || null));
+
+  const profileImagePath = freshProfileHasImage
+    ? (freshProfileImagePath || freshProfileImageUrl || null)
+    : (freshProfile
+      ? null
+      : getSafeProfileImageReference(userMeta.profileImagePath || userMeta.profileImageUrl || null));
+
   return { userName, avatarLetter, avatarColor, profileImageUrl, profileImagePath };
 }
 
@@ -2001,12 +2020,18 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       const connectedSocketId = userSockets.get(userId);
       if (connectedSocketId) {
         const existingMeta = socketMetadata.get(connectedSocketId) || {};
+        const shouldSyncProfileImage = Object.prototype.hasOwnProperty.call(req.body, 'profileImageUrl');
+
         socketMetadata.set(connectedSocketId, {
           ...existingMeta,
           userName: user.userName || existingMeta.userName,
           avatarColor: user.avatarColor || existingMeta.avatarColor,
-          profileImageUrl: user.profileImageUrl || existingMeta.profileImageUrl,
-          profileImagePath: user.profileImageUrl || existingMeta.profileImagePath,
+          profileImageUrl: shouldSyncProfileImage
+            ? (user.profileImageUrl || null)
+            : existingMeta.profileImageUrl,
+          profileImagePath: shouldSyncProfileImage
+            ? (user.profileImagePath || user.profileImageUrl || null)
+            : existingMeta.profileImagePath,
           country: user.country || existingMeta.country,
           gender: user.gender || existingMeta.gender,
           status: user.status || existingMeta.status,
@@ -2026,6 +2051,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
         userName: user.userName,
         avatarColor: user.avatarColor,
         profileImageUrl: user.profileImageUrl,
+        profileImagePath: user.profileImagePath || null,
         status: user.status || null,
         bio: user.bio || null,
         interests: Array.isArray(user.interests) ? user.interests : [],

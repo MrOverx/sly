@@ -32,14 +32,21 @@ function sanitizeFileName(value) {
     .toLowerCase();
 }
 
-function getS3ObjectKey(originalName) {
+function getS3ObjectKey(originalName, userId = null) {
   ensureS3Config();
   const ext = path.extname(originalName || '');
   const base = sanitizeFileName(path.basename(originalName || 'profile', ext));
   const randomId = crypto.randomBytes(8).toString('hex');
   const timestamp = Date.now();
   const name = base.length > 0 ? `${base}-${timestamp}-${randomId}` : `${timestamp}-${randomId}`;
-  return `${AWS_S3_PROFILE_FOLDER}/${name}${ext}`;
+  const folderBase = AWS_S3_PROFILE_FOLDER.replace(/\/+$/, '');
+
+  if (userId && typeof userId === 'string' && userId.trim().length > 0) {
+    const sanitizedUserId = sanitizeFileName(userId);
+    return `${folderBase}/${sanitizedUserId}/profilepic/${name}${ext}`;
+  }
+
+  return `${folderBase}/${name}${ext}`;
 }
 
 function getPublicUrl(key) {
@@ -114,7 +121,7 @@ async function deleteProfileImageFromS3(url) {
   return true;
 }
 
-async function uploadProfileImageToS3(buffer, originalName, contentType) {
+async function uploadProfileImageToS3(buffer, originalName, contentType, userId = null) {
   if (!AWS_S3_BUCKET) {
     throw new Error('Cannot upload to S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable uploads.');
   }
@@ -123,7 +130,7 @@ async function uploadProfileImageToS3(buffer, originalName, contentType) {
     throw new Error('uploadProfileImageToS3 requires a Buffer payload');
   }
 
-  const key = getS3ObjectKey(originalName);
+  const key = getS3ObjectKey(originalName, userId);
   const commandParams = {
     Bucket: AWS_S3_BUCKET,
     Key: key,
