@@ -1536,6 +1536,64 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
   }
 });
 
+// ========== NEW: CANCEL FRIEND REQUEST ENDPOINT ==========
+app.post('/friends/request/:requestId/cancel', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const rawRequestId = req.params.requestId;
+    const requestId = normalizeId(rawRequestId);
+    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+
+    if (!userId || !requestId) {
+      return sendError(res, 400, 'userId and requestId are required');
+    }
+
+    let friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest && requestId.includes('|')) {
+      const [senderId, recipientId] = requestId.split('|').map(normalizeId);
+      if (senderId && senderId.length > 0 && recipientId && recipientId.length > 0) {
+        friendRequest = await getFriendRequest(senderId, recipientId);
+      }
+    }
+
+    if (!friendRequest) {
+      return sendError(res, 404, 'Friend request not found');
+    }
+
+    // Only the sender can cancel a pending friend request
+    if (normalizeId(friendRequest.userId) !== userId) {
+      return sendError(res, 403, 'Not authorized to cancel this request');
+    }
+
+    await deleteFriendRequest(friendRequest.userId, friendRequest.friendId);
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendRequest.friendId);
+
+    Logger.info('friends/request/cancel', 'Friend request canceled', { userId, requestId });
+
+    const recipientSocketId = userSockets.get(friendRequest.friendId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit('friend_request_canceled', {
+        requestId: friendRequest.requestId,
+        userId: friendRequest.userId,
+        fromUserId: friendRequest.userId,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Friend request canceled',
+    });
+  } catch (err) {
+    Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
+    return sendError(res, 500, 'Error canceling friend request', { details: err.message });
+  }
+});
+
 // ========== NEW: REMOVE FRIEND ENDPOINT ==========
 app.post('/friends/remove', async (req, res) => {
   if (!await isDatabaseConnected()) {
