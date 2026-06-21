@@ -4,6 +4,9 @@ const path = require('path');
 // is launched from a different CWD (for example, running nodemon from the root).
 module.paths.unshift(path.join(__dirname, 'node_modules'));
 
+// Logger must be imported before any logger calls during startup.
+const { Logger } = require('./utils/logger');
+
 // Load environment variables from the nearest .env file in the backend or workspace root.
 const envCandidates = [
   path.resolve(__dirname, '.env'),
@@ -72,7 +75,6 @@ const {
 const isDatabaseConnected = isDbConnected;
 
 // ✅ Import optimization utilities
-const { Logger } = require('./utils/logger');
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
