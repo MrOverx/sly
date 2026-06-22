@@ -144,7 +144,8 @@ function buildUserItem(user) {
     throw new Error('User item requires userId');
   }
 
-  const normalizedEmail = normalizeEmail(user.email) || normalizeEmail(user.emailLower);
+  const emailValue = user.email ? String(user.email).trim() : null;
+  const normalizedEmail = normalizeEmail(emailValue) || normalizeEmail(user.emailLower);
   const emailLower = normalizedEmail;
   const now = new Date().toISOString();
   const createdAt = toIso(user.createdAt) || now;
@@ -169,7 +170,7 @@ function buildUserItem(user) {
     userId: String(user.userId),
     userName: user.userName || 'User',
     userNameLower: user.userName ? String(user.userName).trim().toLowerCase() : null,
-    email: normalizedEmail,
+    email: emailValue,
     emailLower,
     authType,
     isGuest: Boolean(user.isGuest),
@@ -385,7 +386,8 @@ async function upsertUser(userData) {
   let user = existing ? { ...existing, ...userData } : { ...userData };
 
   if (!existing) {
-    const emailLower = normalizeEmail(user.email);
+    const emailValue = user.email ? String(user.email).trim() : null;
+    const emailLower = normalizeEmail(emailValue);
     const normalizedEmail = emailLower;
     user = {
       ...user,
@@ -401,7 +403,7 @@ async function upsertUser(userData) {
       userName: user.userName || 'User',
       profileComplete: Boolean(user.profileComplete),
       isActive: user.isActive !== false,
-      email: normalizedEmail,
+      email: emailValue,
       emailLower,
       createdAt: toIso(user.createdAt) || new Date().toISOString(),
       lastLogin: toIso(user.lastLogin) || new Date().toISOString(),
@@ -458,8 +460,9 @@ async function updateUserById(userId, updates) {
 
   const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
   if (updates.email) {
-    const normalizedEmail = normalizeEmail(updates.email);
-    merged.email = normalizedEmail;
+    const emailValue = String(updates.email).trim();
+    const normalizedEmail = normalizeEmail(emailValue);
+    merged.email = emailValue;
     merged.emailLower = normalizedEmail;
   }
   const item = buildUserItem(merged);

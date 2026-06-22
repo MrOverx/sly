@@ -766,7 +766,8 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
       return sendError(res, 400, 'userName, email, and password are required', 'VALIDATION_ERROR');
     }
 
-    const normalizedEmail = String(email).toLowerCase().trim();
+    const emailValue = String(email).trim();
+    const normalizedEmail = emailValue.toLowerCase();
     const newUserId = requestedUserId && String(requestedUserId).trim().length > 0
       ? String(requestedUserId).trim()
       : `local_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -783,7 +784,7 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
     const savedUser = await createUser({
       userId: newUserId,
       userName: String(userName).trim(),
-      email: normalizedEmail,
+      email: emailValue,
       passwordHash: hashedPassword,
       authType: 'MAIL',
       isGuest: false,
