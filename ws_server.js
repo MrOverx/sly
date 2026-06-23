@@ -1025,6 +1025,25 @@ app.post('/auth/forgot-password', forgotPasswordLimiter, asyncHandler(async (req
   }
 }));
 
+// Development-only helper: create and return OTP for an email (ONLY in development)
+if (process.env.NODE_ENV === 'development') {
+  app.post('/auth/dev-create-otp', asyncHandler(async (req, res) => {
+    const { email } = req.body || {};
+    if (!email || typeof email !== 'string' || email.trim() === '') {
+      return sendError(res, 400, 'Email is required', 'INVALID_EMAIL');
+    }
+    try {
+      const normalizedEmail = String(email).toLowerCase().trim();
+      const otp = await createOtpForEmail(normalizedEmail);
+      Logger.info('auth/dev-create-otp', 'Dev OTP created', { email: normalizedEmail });
+      return sendSuccess(res, { email: normalizedEmail, otp }, 'Dev OTP created (development only)');
+    } catch (err) {
+      Logger.error('auth/dev-create-otp', 'Error creating dev OTP', err && err.message);
+      return sendError(res, 500, 'Unable to create OTP', { details: err && err.message });
+    }
+  }));
+}
+
 app.post('/auth/reset-password', resetPasswordLimiter, asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');

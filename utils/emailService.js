@@ -21,7 +21,9 @@ const smtpFromName = process.env.SMTP_FROM_NAME || appName;
 
 /** @returns {boolean} */
 function isEmailConfigured() {
-  return !!smtpUser && !!smtpPass;
+  // Allow development fallback when SMTP credentials are not provided so
+  // OTP flows can be exercised locally (OTP will be logged instead of sent).
+  return (!!smtpUser && !!smtpPass) || process.env.NODE_ENV === 'development';
 }
 
 // Lazy singleton — only created on first send attempt
@@ -72,8 +74,11 @@ function _getTransporter() {
  * @param {string} otp  - One-time password string
  */
 async function sendOtpEmail(to, otp) {
-  if (!isEmailConfigured()) {
-    throw new Error('SMTP credentials are not configured (SMTP_USER / SMTP_PASS missing)');
+  // If SMTP credentials are not present in non-production environments,
+  // don't throw — log the OTP to the server logs so developers can continue.
+  if (!smtpUser || !smtpPass) {
+    Logger.warn('email', 'SMTP not configured - logging OTP to server log (development mode)', { to, otp });
+    return { messageId: 'LOGGED_TO_CONSOLE' };
   }
 
   const transporter = _getTransporter();

@@ -1,4 +1,6 @@
 const { DynamoDBClient, DescribeTableCommand } = require('@aws-sdk/client-dynamodb');
+const fs = require('fs');
+const path = require('path');
 const {
   DynamoDBDocumentClient,
   GetCommand,
@@ -16,7 +18,39 @@ const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || '
 const MAX_PROFILE_IMAGE_URL_LENGTH = 20000;
 const MAX_INLINE_PROFILE_IMAGE_URL_LENGTH = 120 * 1024; // 120KB limit for persistent inline images
 
-const client = new DynamoDBClient({ region: AWS_REGION });
+// Allow connecting to a local DynamoDB endpoint (DYNAMODB_ENDPOINT) for development/testing
+const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || process.env.AWS_ENDPOINT || null;
+const clientOptions = { region: AWS_REGION };
+if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
+const client = new DynamoDBClient(clientOptions);
+
+// Development fallback: simple JSON-backed store when running locally without DynamoDB
+const USE_DEV_STORE = (process.env.NODE_ENV === 'development') && !DYNAMODB_ENDPOINT;
+const DEV_STORE_PATH = path.resolve(__dirname, '..', 'dev_dynamo_users.json');
+
+function loadDevStore() {
+  try {
+    if (!fs.existsSync(DEV_STORE_PATH)) {
+      fs.writeFileSync(DEV_STORE_PATH, JSON.stringify([]), 'utf8');
+    }
+    const raw = fs.readFileSync(DEV_STORE_PATH, 'utf8');
+    const items = JSON.parse(raw || '[]');
+    return Array.isArray(items) ? items : [];
+  } catch (err) {
+    console.warn('Unable to read dev store:', err && err.message);
+    return [];
+  }
+}
+
+function saveDevStore(items) {
+  try {
+    fs.writeFileSync(DEV_STORE_PATH, JSON.stringify(items, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('Unable to write dev store:', err && err.message);
+    return false;
+  }
+}
 const ddb = DynamoDBDocumentClient.from(client, {
   marshallOptions: {
     removeUndefinedValues: true,
@@ -260,6 +294,7 @@ async function describeTable() {
 }
 
 async function isDbConnected() {
+  if (USE_DEV_STORE) return true;
   try {
     await describeTable();
     return true;
@@ -271,6 +306,12 @@ async function isDbConnected() {
 async function getUserById(userId) {
   if (!userId) return null;
   await loadTableSchema();
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const found = items.find((it) => String(it.userId) === String(userId));
+    return normalizeDdbItem(found || null);
+  }
+
   const key = TABLE_HAS_SORT_KEY ? buildUserPrimaryKey(userId) : { [TABLE_HASH_KEY]: userId };
   const result = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
   return normalizeDdbItem(result.Item || null);
@@ -279,6 +320,13 @@ async function getUserById(userId) {
 async function getUserByEmail(email) {
   const emailLower = normalizeEmail(email);
   if (!emailLower) return null;
+
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const found = items.find((it) => it.emailLower && String(it.emailLower) === emailLower);
+    if (found) return normalizeDdbItem(found);
+    return null;
+  }
 
   try {
     const result = await ddb.send(new QueryCommand({
@@ -292,7 +340,7 @@ async function getUserByEmail(email) {
     }));
 
     if (result.Items && result.Items.length) {
-      return result.Items[0];
+      return normalizeDdbItem(result.Items[0]);
     }
   } catch (err) {
     // Query may fail if the GSI is missing or misconfigured; fall through to scan fallback.
@@ -306,7 +354,7 @@ async function getUserByEmail(email) {
   }));
 
   if (scan.Items && scan.Items.length) {
-    return scan.Items[0];
+    return normalizeDdbItem(scan.Items[0]);
   }
 
   // Legacy fallback: some records may not have emailLower populated.
@@ -321,7 +369,7 @@ async function getUserByEmail(email) {
       return item.email && String(item.email).trim().toLowerCase() === emailLower;
     });
     if (legacyUser) {
-      return legacyUser;
+      return normalizeDdbItem(legacyUser);
     }
   }
 
@@ -381,7 +429,7 @@ async function findUserByLookup(lookup) {
     Limit: 1,
   }));
 
-  return result.Items && result.Items.length ? result.Items[0] : null;
+  return result.Items && result.Items.length ? normalizeDdbItem(result.Items[0]) : null;
 }
 
 function normalizeDdbItem(item) {
@@ -400,6 +448,47 @@ async function upsertUser(userData) {
   }
 
   await loadTableSchema();
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const existing = items.find((u) => String(u.userId) === String(userData.userId));
+
+    if (userData.email) {
+      const emailCollisionUser = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
+      if (emailCollisionUser && emailCollisionUser.userId !== userData.userId) {
+        throw new Error('EMAIL_CONFLICT');
+      }
+    }
+
+    let user = existing ? { ...existing, ...userData } : { ...userData };
+
+    if (!existing) {
+      const emailValue = user.email ? String(user.email).trim() : null;
+      const emailLower = normalizeEmail(emailValue);
+      user = {
+        ...user,
+        authType: normalizeAuthType(user.authType) ?? (Boolean(user.isGuest) ? 'GUEST' : (user.passwordHash ? 'MAIL' : (emailLower ? 'MAIL' : 'LOCAL'))),
+        isGuest: Boolean(user.isGuest),
+        userName: user.userName || 'User',
+        profileComplete: Boolean(user.profileComplete),
+        isActive: user.isActive !== false,
+        email: emailValue,
+        emailLower,
+        createdAt: toIso(user.createdAt) || new Date().toISOString(),
+        lastLogin: toIso(user.lastLogin) || new Date().toISOString(),
+      };
+    }
+
+    const item = buildUserItem(user);
+    // remove SK for hash-only tables in dev store representation
+    if (!TABLE_HAS_SORT_KEY) delete item.SK;
+
+    // upsert into dev store
+    const filtered = items.filter((u) => String(u.userId) !== String(item.userId));
+    filtered.push(item);
+    saveDevStore(filtered);
+    return normalizeDdbItem(item);
+  }
+
   const existing = await getUserById(userData.userId);
 
   if (userData.email) {
@@ -451,6 +540,21 @@ async function createUser(userData) {
   }
 
   await loadTableSchema();
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const existingById = items.find((u) => String(u.userId) === String(userData.userId));
+    if (existingById) throw new Error('USER_EXISTS');
+    if (userData.email) {
+      const existingByEmail = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
+      if (existingByEmail) throw new Error('USER_EXISTS');
+    }
+    const item = buildUserItem(userData);
+    if (!TABLE_HAS_SORT_KEY) delete item.SK;
+    items.push(item);
+    saveDevStore(items);
+    return normalizeDdbItem(item);
+  }
+
   const existingById = await getUserById(userData.userId);
   if (existingById) {
     throw new Error('USER_EXISTS');
@@ -475,6 +579,30 @@ async function createUser(userData) {
 async function updateUserById(userId, updates) {
   const current = await getUserById(userId);
   if (!current) return null;
+
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    if (updates.email) {
+      const normalizedEmail = normalizeEmail(updates.email);
+      const existingByEmail = items.find((u) => u.emailLower === normalizedEmail && String(u.userId) !== String(userId));
+      if (existingByEmail) throw new Error('EMAIL_CONFLICT');
+    }
+
+    const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
+    if (updates.email) {
+      const emailValue = String(updates.email).trim();
+      const normalizedEmail = normalizeEmail(emailValue);
+      merged.email = emailValue;
+      merged.emailLower = normalizedEmail;
+    }
+
+    const item = buildUserItem(merged);
+    if (!TABLE_HAS_SORT_KEY) delete item.SK;
+    const filtered = items.filter((u) => String(u.userId) !== String(userId));
+    filtered.push(item);
+    saveDevStore(filtered);
+    return normalizeDdbItem(item);
+  }
 
   if (updates.email) {
     const normalizedEmail = normalizeEmail(updates.email);
@@ -507,12 +635,22 @@ async function deleteUserById(userId) {
 async function searchUsers(query, limit = 25) {
   const queryLower = String(query || '').trim().toLowerCase();
   if (!queryLower) return [];
-
   const expressionValues = {
     ':userType': 'USER',
     ':query': queryLower,
   };
   const filter = 'itemType = :userType AND (contains(userNameLower, :query) OR contains(userName, :query) OR contains(userId, :query) OR contains(emailLower, :query))';
+
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const found = items.filter((it) => {
+      const name = String(it.userName || '').toLowerCase();
+      const email = String(it.email || '').toLowerCase();
+      const id = String(it.userId || '').toLowerCase();
+      return name.includes(queryLower) || email.includes(queryLower) || id.includes(queryLower);
+    }).slice(0, limit).map(normalizeDdbItem);
+    return found;
+  }
 
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
@@ -525,7 +663,7 @@ async function searchUsers(query, limit = 25) {
     ProjectionExpression: 'userId, userName, userNameLower, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, createdAt, lastLogin, xp, itemType',
   }));
 
-  return result.Items || [];
+  return (result.Items || []).map(normalizeDdbItem);
 }
 
 async function clearExpiredStatuses(cutoffIso) {
@@ -782,6 +920,12 @@ async function getUsersByIds(userIds) {
     return [];
   }
 
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const found = items.filter((it) => userIds.includes(String(it.userId))).map(normalizeDdbItem);
+    return found;
+  }
+
   const keys = userIds.map((id) => buildItemKey(USER_PREFIX, id));
   const result = await ddb.send(new BatchGetCommand({
     RequestItems: {
@@ -790,7 +934,7 @@ async function getUsersByIds(userIds) {
       },
     },
   }));
-  return result.Responses && result.Responses[TABLE_NAME] ? result.Responses[TABLE_NAME] : [];
+  return result.Responses && result.Responses[TABLE_NAME] ? (result.Responses[TABLE_NAME].map(normalizeDdbItem)) : [];
 }
 
 async function getActiveBlock(userId) {
@@ -836,7 +980,7 @@ async function getReportsForUser(reportedUserId) {
       ':pk': `${REPORT_PREFIX}${reportedUserId}`,
     },
   }));
-  return result.Items || [];
+  return (result.Items || []).map(normalizeDdbItem);
 }
 
 async function getReport(reportedUserId, reporterId) {
