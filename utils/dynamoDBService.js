@@ -290,17 +290,42 @@ async function getUserByEmail(email) {
       },
       Limit: 1,
     }));
-    return result.Items && result.Items.length ? result.Items[0] : null;
+
+    if (result.Items && result.Items.length) {
+      return result.Items[0];
+    }
   } catch (err) {
-    // Fallback if GSI is not configured or query fails
-    const scan = await ddb.send(new ScanCommand({
-      TableName: TABLE_NAME,
-      FilterExpression: 'emailLower = :emailLower',
-      ExpressionAttributeValues: { ':emailLower': emailLower },
-      Limit: 1,
-    }));
-    return scan.Items && scan.Items.length ? scan.Items[0] : null;
+    // Query may fail if the GSI is missing or misconfigured; fall through to scan fallback.
   }
+
+  const scan = await ddb.send(new ScanCommand({
+    TableName: TABLE_NAME,
+    FilterExpression: 'emailLower = :emailLower',
+    ExpressionAttributeValues: { ':emailLower': emailLower },
+    Limit: 1,
+  }));
+
+  if (scan.Items && scan.Items.length) {
+    return scan.Items[0];
+  }
+
+  // Legacy fallback: some records may not have emailLower populated.
+  const legacyScan = await ddb.send(new ScanCommand({
+    TableName: TABLE_NAME,
+    FilterExpression: 'attribute_not_exists(emailLower)',
+    Limit: 50,
+  }));
+
+  if (legacyScan.Items && legacyScan.Items.length) {
+    const legacyUser = legacyScan.Items.find((item) => {
+      return item.email && String(item.email).trim().toLowerCase() === emailLower;
+    });
+    if (legacyUser) {
+      return legacyUser;
+    }
+  }
+
+  return null;
 }
 
 async function findUserByLookup(lookup) {
@@ -326,7 +351,8 @@ async function findUserByLookup(lookup) {
           if (user) return user;
         } else if (typeof clause.email === 'object' && clause.email.$regex) {
           const regexValue = String(clause.email.$regex);
-          const normalizedEmail = regexValue.replace(/^\^|\$$/g, '');
+          const strippedRegex = regexValue.replace(/^\^/, '').replace(/\$$/, '');
+          const normalizedEmail = strippedRegex.replace(/\\(.)/g, '$1');
           const user = await getUserByEmail(normalizedEmail);
           if (user) return user;
         }

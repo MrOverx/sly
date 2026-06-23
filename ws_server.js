@@ -857,9 +857,7 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
     const lookup = { $or: [] };
     if (userId) lookup.$or.push({ userId: String(userId).trim() });
     if (normalizedEmail) {
-      lookup.$or.push({ 
-        email: { $regex: `^${normalizedEmail.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`, $options: 'i' } 
-      });
+      lookup.$or.push({ email: normalizedEmail });
     }
 
     if (lookup.$or.length === 0) {
