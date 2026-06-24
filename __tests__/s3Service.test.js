@@ -1,4 +1,4 @@
-const { getS3ObjectKey, isS3Url } = require('../utils/s3Service');
+const { getS3ObjectKey, getPublicUrl, isS3Url } = require('../utils/s3Service');
 
 describe('s3Service profile image storage', () => {
   beforeEach(() => {
@@ -17,6 +17,12 @@ describe('s3Service profile image storage', () => {
 
     expect(firstKey).toBe(secondKey);
     expect(firstKey).toContain('profiles/user-123/profilepic/current');
+  });
+
+  it('builds a canonical public URL for browser access', () => {
+    expect(getPublicUrl('profiles/user-123/profilepic/current.png')).toBe(
+      'https://test-bucket.s3.amazonaws.com/profiles/user-123/profilepic/current.png',
+    );
   });
 
   it('recognizes S3 URLs generated from the configured bucket', () => {

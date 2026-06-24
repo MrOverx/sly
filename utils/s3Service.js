@@ -12,7 +12,7 @@ function getS3Config() {
     bucket: process.env.AWS_S3_BUCKET || null,
     profileFolder: process.env.AWS_S3_PROFILE_FOLDER || 'profiles',
     publicUrl: process.env.AWS_S3_PUBLIC_URL || null,
-    acl: process.env.AWS_S3_ACL || null,
+    acl: process.env.AWS_S3_ACL || 'public-read',
   };
 }
 
@@ -64,11 +64,12 @@ function getPublicUrl(key) {
     return `${publicUrl.replace(/\/+$/, '')}/${encodedKey}`;
   }
 
+  const normalizedBucket = bucket.replace(/^\/+|\/+$/g, '');
   if (region === 'us-east-1') {
-    return `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
+    return `https://${normalizedBucket}.s3.amazonaws.com/${encodedKey}`;
   }
 
-  return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
+  return `https://${normalizedBucket}.s3.${region}.amazonaws.com/${encodedKey}`;
 }
 
 function getS3ObjectKeyFromUrl(url) {
@@ -210,4 +211,5 @@ module.exports = {
   isS3Configured,
   isS3Url,
   getS3ObjectKey,
+  getPublicUrl,
 };
