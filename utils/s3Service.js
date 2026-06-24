@@ -1,6 +1,7 @@
 const path = require('path');
 const crypto = require('crypto');
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1',
@@ -116,6 +117,32 @@ function isS3Url(url) {
   return Boolean(getS3ObjectKeyFromUrl(url));
 }
 
+async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600) {
+  const { bucket } = getS3Config();
+  if (!bucket) {
+    return null;
+  }
+
+  const key = typeof urlOrKey === 'string' && urlOrKey.includes('://')
+    ? getS3ObjectKeyFromUrl(urlOrKey)
+    : urlOrKey;
+
+  if (!key || typeof key !== 'string' || key.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+    return await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+  } catch (error) {
+    console.warn('[s3Service] Failed to generate signed profile image URL:', error?.message || error);
+    return getPublicUrl(key);
+  }
+}
+
 async function deleteProfileImageFromS3(url) {
   const { bucket } = getS3Config();
   if (!bucket) {
@@ -183,7 +210,7 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
 
   return {
     key,
-    url: getPublicUrl(key),
+    url: await getAccessibleProfileImageUrl(key),
   };
 }
 
@@ -212,4 +239,5 @@ module.exports = {
   isS3Url,
   getS3ObjectKey,
   getPublicUrl,
+  getAccessibleProfileImageUrl,
 };
