@@ -80,16 +80,17 @@ const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
-const { uploadProfileImageToS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
+const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
 
-// Setup multer storage for profile uploads in memory so files can be uploaded directly to S3
+// Profile images are stored as S3 objects and referenced from DynamoDB metadata.
+// The server does not write image files to its local filesystem or upload folder.
 const storage = multer.memoryStorage();
 
-const upload = multer({ 
+const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const acceptedImageExtensions = new Set([
       '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif',
@@ -104,7 +105,7 @@ const upload = multer({
     }
 
     cb(new Error('Not an image! Please upload an image.'), false);
-  }
+  },
 });
 
 
@@ -228,6 +229,10 @@ if (!isS3Configured()) {
 }
 
 app.post('/upload', upload.single('profileImage'), async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
   if (!isS3Configured()) {
     return sendError(res, 500, 'S3 uploads are not configured', {
       code: 'S3_CONFIG_MISSING',
@@ -240,36 +245,115 @@ app.post('/upload', upload.single('profileImage'), async (req, res) => {
   }
 
   const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required for profile image upload', 'VALIDATION_ERROR');
+  }
 
   try {
-    Logger.info('upload', 'Uploading profile image to S3', {
-      filename: req.file.originalname || `profile-${Date.now()}`,
-      size: req.file.size,
-      userId,
+    const existingUser = await getUserById(userId);
+    if (!existingUser) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    const previousUrl = existingUser.profileImageUrl || null;
+    const uploaded = previousUrl && isS3Url(previousUrl)
+      ? await replaceProfileImageInS3(
+          req.file.buffer,
+          req.file.originalname || `profile-${Date.now()}`,
+          req.file.mimetype || 'application/octet-stream',
+          userId,
+          previousUrl,
+        )
+      : await uploadProfileImageToS3(
+          req.file.buffer,
+          req.file.originalname || `profile-${Date.now()}`,
+          req.file.mimetype || 'application/octet-stream',
+          userId,
+        );
+
+    const pictureName = normalizeStringInput(req.body.pictureName || req.body.picture_name);
+    const updatedUser = await updateUserById(userId, {
+      profileImageUrl: uploaded.url,
+      profileImagePath: uploaded.url,
+      pictureName: pictureName || existingUser.pictureName || null,
+      updatedAt: new Date(),
     });
 
-    const uploaded = await uploadProfileImageToS3(
-      req.file.buffer,
-      req.file.originalname || `profile-${Date.now()}`,
-      req.file.mimetype || 'application/octet-stream',
-      userId,
-    );
+    userCache.invalidate(userId);
 
-    Logger.info('upload', 'Profile image uploaded successfully', {
+    Logger.info('upload', 'Profile image uploaded and persisted to DynamoDB', {
+      userId,
       key: uploaded.key,
       url: uploaded.url,
+      replacedExisting: Boolean(previousUrl && isS3Url(previousUrl)),
     });
 
     return sendSuccess(res, {
       data: {
         url: uploaded.url,
         key: uploaded.key,
+        profileImageUrl: updatedUser?.profileImageUrl || uploaded.url,
+        user: updatedUser || null,
       },
     }, 'Image uploaded successfully');
   } catch (err) {
     Logger.error('upload', 'Error uploading image to S3', err?.message || err);
     return sendError(res, 500, 'Failed to upload image to S3', {
       code: 'S3_UPLOAD_FAILED',
+      details: err?.message || String(err),
+    });
+  }
+});
+
+app.delete(['/upload', '/upload/:userId'], async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.params.userId || req.body.userId || req.query.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required for profile image deletion', 'VALIDATION_ERROR');
+  }
+
+  try {
+    const existingUser = await getUserById(userId);
+    if (!existingUser) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    const previousUrl = existingUser.profileImageUrl || null;
+    if (previousUrl && isS3Url(previousUrl)) {
+      try {
+        await deleteProfileImageFromS3(previousUrl);
+      } catch (deleteErr) {
+        Logger.warn('upload/delete', 'Unable to delete previous profile image from S3', {
+          userId,
+          previousUrl,
+          error: deleteErr?.message || deleteErr,
+        });
+      }
+    }
+
+    const updatedUser = await updateUserById(userId, {
+      profileImageUrl: null,
+      profileImagePath: null,
+      pictureName: null,
+      updatedAt: new Date(),
+    });
+    userCache.invalidate(userId);
+
+    Logger.info('upload/delete', 'Profile image removed and DynamoDB metadata cleared', { userId });
+
+    return sendSuccess(res, {
+      data: {
+        profileImageUrl: null,
+        user: updatedUser || null,
+      },
+    }, 'Profile image removed successfully');
+  } catch (err) {
+    Logger.error('upload/delete', 'Error removing profile image', err?.message || err);
+    return sendError(res, 500, 'Failed to remove profile image', {
+      code: 'PROFILE_IMAGE_DELETE_FAILED',
       details: err?.message || String(err),
     });
   }
@@ -1238,17 +1322,18 @@ async function handleGetUserProfile(req, res) {
   }
 
   try {
-    // ✅ PERFORMANCE: Check cache first
+    // ✅ PERFORMANCE: Check cache first and deduplicate concurrent loads
     let user = userCache.get(userId);
 
     if (!user) {
-      user = await getUserById(userId);
+      user = await userCache.getOrLoad(userId, async () => {
+        const fetchedUser = await getUserById(userId);
+        return fetchedUser || null;
+      });
 
       if (!user) {
         return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
       }
-
-      userCache.set(userId, user);
     }
 
     const friendCount = await countFriendsForUser(userId);
@@ -1666,28 +1751,40 @@ app.get('/friends/list', async (req, res) => {
       return sendError(res, 400, 'userId is required');
     }
 
-    // Get all friends
     const friends = await listFriendsForUser(userId);
+    const friendIds = friends.map((id) => normalizeId(id)).filter(Boolean);
 
-    // Get friend user details with all profile fields
-    const friendIds = friends.map((id) => normalizeId(id));
     const cachedUsers = userCache.batchGet(friendIds);
     const missingFriendIds = friendIds.filter((id) => !cachedUsers.get(id));
 
-    let cachedFriendUsers = Array.from(cachedUsers.values()).filter(Boolean);
     let freshFriendUsers = [];
     if (missingFriendIds.length > 0) {
       freshFriendUsers = await getUsersByIds(missingFriendIds);
-      freshFriendUsers.forEach((u) => userCache.set(normalizeId(u.userId), u));
+      freshFriendUsers.forEach((u) => {
+        const normalizedId = normalizeId(u.userId);
+        if (normalizedId) {
+          userCache.set(normalizedId, u);
+        }
+      });
     }
 
     const friendUserMap = new Map();
-    cachedFriendUsers.forEach((u) => friendUserMap.set(normalizeId(u.userId), u));
-    freshFriendUsers.forEach((u) => friendUserMap.set(normalizeId(u.userId), u));
+    for (const user of Array.from(cachedUsers.values()).filter(Boolean)) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        friendUserMap.set(normalizedId, user);
+      }
+    }
+    for (const user of freshFriendUsers) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        friendUserMap.set(normalizedId, user);
+      }
+    }
 
     const orderedFriendUsers = friendIds
       .map((id) => friendUserMap.get(id))
-      .filter((u) => Boolean(u));
+      .filter(Boolean);
 
     // ✅ Enhanced: Include online status by checking if user has active socket
     const friendList = orderedFriendUsers.map((u) => {
@@ -1734,14 +1831,38 @@ app.get('/friends/requests/incoming', async (req, res) => {
     // Get all incoming friend requests (where user is the recipient)
     const incomingRequests = await queryFriendRequestsByRecipient(userId);
 
-    // Get sender user details
-    const senderIds = incomingRequests.map((r) => r.userId);
-    const senderUsers = await getUsersByIds(senderIds);
+    const senderIds = incomingRequests.map((r) => normalizeId(r.userId)).filter(Boolean);
+    const cachedSenderUsers = userCache.batchGet(senderIds);
+    const missingSenderIds = senderIds.filter((id) => !cachedSenderUsers.get(id));
 
-    // Map requests to include sender details
+    let freshSenderUsers = [];
+    if (missingSenderIds.length > 0) {
+      freshSenderUsers = await getUsersByIds(missingSenderIds);
+      freshSenderUsers.forEach((u) => {
+        const normalizedId = normalizeId(u.userId);
+        if (normalizedId) {
+          userCache.set(normalizedId, u);
+        }
+      });
+    }
+
+    const senderUserMap = new Map();
+    for (const user of Array.from(cachedSenderUsers.values()).filter(Boolean)) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        senderUserMap.set(normalizedId, user);
+      }
+    }
+    for (const user of freshSenderUsers) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        senderUserMap.set(normalizedId, user);
+      }
+    }
+
     const requestsList = incomingRequests.map((request) => {
       const normalizedSenderId = normalizeId(request.userId);
-      const sender = senderUsers.find((u) => normalizeId(u.userId) === normalizedSenderId);
+      const sender = normalizedSenderId ? senderUserMap.get(normalizedSenderId) : null;
       const requestId = normalizeId(request.requestId) ||
         (request.userId && request.friendId ? `${normalizeId(request.userId)}|${normalizeId(request.friendId)}` : '');
       return {

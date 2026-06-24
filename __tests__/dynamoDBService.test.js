@@ -38,4 +38,38 @@ describe('DynamoDB user item profile image normalization', () => {
     expect(item.profileImageUrl).toBe(imageUrl);
     expect(item.profileImagePath).toBeNull();
   });
+
+  it('should reject inline image data and local file paths for profile image storage', () => {
+    const dataUriImage = 'data:image/png;base64,AAAA';
+    const localPathImage = '/tmp/avatar.png';
+
+    const dataUriItem = buildUserItem({
+      userId: 'test-user-data',
+      userName: 'Test User',
+      profileImageUrl: dataUriImage,
+    });
+
+    const localPathItem = buildUserItem({
+      userId: 'test-user-local',
+      userName: 'Test User',
+      profileImagePath: localPathImage,
+    });
+
+    expect(dataUriItem.profileImageUrl).toBeNull();
+    expect(dataUriItem.profileImagePath).toBeNull();
+    expect(localPathItem.profileImageUrl).toBeNull();
+    expect(localPathItem.profileImagePath).toBeNull();
+  });
+
+  it('should preserve remote profile image URLs for DynamoDB metadata', () => {
+    const imageUrl = 'https://example.com/uploads/profile.png';
+    const item = buildUserItem({
+      userId: 'test-user-remote',
+      userName: 'Test User',
+      profileImageUrl: imageUrl,
+    });
+
+    expect(item.profileImageUrl).toBe(imageUrl);
+    expect(item.profileImagePath).toBeNull();
+  });
 });

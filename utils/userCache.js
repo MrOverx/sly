@@ -152,6 +152,40 @@ class UserCache {
       this.set(userId, userData);
     }
   }
+
+  /**
+   * Load a value once per key while a request is in-flight.
+   * This deduplicates concurrent lookups that would otherwise issue duplicate work.
+   */
+  async getOrLoad(userId, loader) {
+    if (!userId || typeof userId !== 'string' || typeof loader !== 'function') {
+      return null;
+    }
+
+    const cached = this.get(userId);
+    if (cached) return cached;
+
+    const inflightKey = `__inflight__:${userId}`;
+    const inflight = this.cache.get(inflightKey);
+    if (inflight) {
+      return inflight.promise;
+    }
+
+    const promise = (async () => {
+      try {
+        const value = await loader();
+        if (value) {
+          this.set(userId, value);
+        }
+        return value;
+      } finally {
+        this.cache.delete(inflightKey);
+      }
+    })();
+
+    this.cache.set(inflightKey, { promise, expiresAt: Date.now() + 60_000 });
+    return promise;
+  }
 }
 
 // Export singleton instance

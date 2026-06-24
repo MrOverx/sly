@@ -25,7 +25,8 @@ if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
 // Development fallback: simple JSON-backed store when running locally without DynamoDB
-const USE_DEV_STORE = (process.env.NODE_ENV === 'development') && !DYNAMODB_ENDPOINT;
+// This must be explicitly enabled with USE_DEV_STORE=true.
+const USE_DEV_STORE = (process.env.USE_DEV_STORE === 'true') && !DYNAMODB_ENDPOINT;
 const DEV_STORE_PATH = path.resolve(__dirname, '..', 'dev_dynamo_users.json');
 
 function loadDevStore() {
@@ -117,10 +118,44 @@ function normalizeProfileImageReference(value) {
   const stringValue = String(value).trim();
   if (!stringValue) return null;
   if (stringValue.length > MAX_PROFILE_IMAGE_URL_LENGTH) return null;
+
   const lower = stringValue.toLowerCase();
-  if (lower.startsWith('data:') && stringValue.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
+  if (lower.startsWith('data:')) {
     return null;
   }
+
+  if (lower.startsWith('/')) {
+    return null;
+  }
+
+  if (lower.includes('upload') && !/^https?:\/\//i.test(stringValue)) {
+    return null;
+  }
+
+  if (lower.startsWith('file:')) {
+    return null;
+  }
+
+  if (lower.startsWith('c:')) {
+    return null;
+  }
+
+  if (lower.startsWith('blob:')) {
+    return null;
+  }
+
+  if (lower.startsWith('content:')) {
+    return null;
+  }
+
+  if (lower.startsWith('app://')) {
+    return null;
+  }
+
+  if (stringValue.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
+    return null;
+  }
+
   return stringValue;
 }
 

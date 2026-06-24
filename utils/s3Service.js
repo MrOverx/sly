@@ -2,22 +2,29 @@ const path = require('path');
 const crypto = require('crypto');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
-const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
-const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET;
-const AWS_S3_PROFILE_FOLDER = process.env.AWS_S3_PROFILE_FOLDER || 'profiles';
-const AWS_S3_PUBLIC_URL = process.env.AWS_S3_PUBLIC_URL || null;
-const AWS_S3_ACL = process.env.AWS_S3_ACL || null;
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1',
+});
 
-const s3Client = new S3Client({ region: AWS_REGION });
+function getS3Config() {
+  return {
+    region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1',
+    bucket: process.env.AWS_S3_BUCKET || null,
+    profileFolder: process.env.AWS_S3_PROFILE_FOLDER || 'profiles',
+    publicUrl: process.env.AWS_S3_PUBLIC_URL || null,
+    acl: process.env.AWS_S3_ACL || null,
+  };
+}
 
 function ensureS3Config() {
-  if (!AWS_S3_BUCKET) {
+  const { bucket } = getS3Config();
+  if (!bucket) {
     throw new Error('Missing required environment variable AWS_S3_BUCKET for S3 uploads');
   }
 }
 
 function isS3Configured() {
-  return Boolean(AWS_S3_BUCKET);
+  return Boolean(getS3Config().bucket);
 }
 
 function sanitizeFileName(value) {
@@ -34,33 +41,34 @@ function sanitizeFileName(value) {
 
 function getS3ObjectKey(originalName, userId = null) {
   ensureS3Config();
+  const { profileFolder } = getS3Config();
   const ext = path.extname(originalName || '');
-  const base = sanitizeFileName(path.basename(originalName || 'profile', ext));
-  const randomId = crypto.randomBytes(8).toString('hex');
-  const timestamp = Date.now();
-  const name = base.length > 0 ? `${base}-${timestamp}-${randomId}` : `${timestamp}-${randomId}`;
-  const folderBase = AWS_S3_PROFILE_FOLDER.replace(/\/+$/, '');
+  const folderBase = profileFolder.replace(/\/+$/, '');
 
   if (userId && typeof userId === 'string' && userId.trim().length > 0) {
     const sanitizedUserId = sanitizeFileName(userId);
-    return `${folderBase}/${sanitizedUserId}/profilepic/${name}${ext}`;
+    const currentFileName = 'current' + (ext || '.png');
+    return `${folderBase}/${sanitizedUserId}/profilepic/${currentFileName}`;
   }
 
-  return `${folderBase}/${name}${ext}`;
+  const base = sanitizeFileName(path.basename(originalName || 'profile', ext));
+  const fallbackName = base.length > 0 ? `${base}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}` : `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+  return `${folderBase}/${fallbackName}${ext}`;
 }
 
 function getPublicUrl(key) {
   ensureS3Config();
+  const { region, bucket, publicUrl } = getS3Config();
   const encodedKey = encodeURI(key);
-  if (AWS_S3_PUBLIC_URL) {
-    return `${AWS_S3_PUBLIC_URL.replace(/\/+$/, '')}/${encodedKey}`;
+  if (publicUrl) {
+    return `${publicUrl.replace(/\/+$/, '')}/${encodedKey}`;
   }
 
-  if (AWS_REGION === 'us-east-1') {
-    return `https://${AWS_S3_BUCKET}.s3.amazonaws.com/${encodedKey}`;
+  if (region === 'us-east-1') {
+    return `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
   }
 
-  return `https://${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${encodedKey}`;
+  return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
 }
 
 function getS3ObjectKeyFromUrl(url) {
@@ -68,8 +76,9 @@ function getS3ObjectKeyFromUrl(url) {
     return null;
   }
 
+  const { region, bucket, publicUrl } = getS3Config();
   const candidate = url.trim();
-  const normalizedPublicUrl = AWS_S3_PUBLIC_URL ? AWS_S3_PUBLIC_URL.replace(/\/+$/, '') : null;
+  const normalizedPublicUrl = publicUrl ? publicUrl.replace(/\/+$/, '') : null;
 
   if (normalizedPublicUrl && candidate.startsWith(normalizedPublicUrl)) {
     return candidate.slice(normalizedPublicUrl.length).replace(/^\/+/, '');
@@ -80,20 +89,20 @@ function getS3ObjectKeyFromUrl(url) {
     const hostname = parsedUrl.hostname.toLowerCase();
     const pathname = parsedUrl.pathname.replace(/^\/+/, '');
 
-    if (AWS_S3_BUCKET && hostname === `${AWS_S3_BUCKET}.s3.amazonaws.com`) {
+    if (bucket && hostname === `${bucket}.s3.amazonaws.com`) {
       return pathname;
     }
 
-    if (AWS_S3_BUCKET && hostname === `${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com`) {
+    if (bucket && hostname === `${bucket}.s3.${region}.amazonaws.com`) {
       return pathname;
     }
 
-    if (AWS_S3_BUCKET && hostname === `s3.${AWS_REGION}.amazonaws.com` && pathname.startsWith(`${AWS_S3_BUCKET}/`)) {
-      return pathname.slice(AWS_S3_BUCKET.length + 1);
+    if (bucket && hostname === `s3.${region}.amazonaws.com` && pathname.startsWith(`${bucket}/`)) {
+      return pathname.slice(bucket.length + 1);
     }
 
-    if (AWS_S3_BUCKET && hostname === 's3.amazonaws.com' && pathname.startsWith(`${AWS_S3_BUCKET}/`)) {
-      return pathname.slice(AWS_S3_BUCKET.length + 1);
+    if (bucket && hostname === 's3.amazonaws.com' && pathname.startsWith(`${bucket}/`)) {
+      return pathname.slice(bucket.length + 1);
     }
 
     return null;
@@ -107,7 +116,8 @@ function isS3Url(url) {
 }
 
 async function deleteProfileImageFromS3(url) {
-  if (!AWS_S3_BUCKET) {
+  const { bucket } = getS3Config();
+  if (!bucket) {
     throw new Error('Cannot delete from S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable deletes.');
   }
 
@@ -120,7 +130,7 @@ async function deleteProfileImageFromS3(url) {
   }
 
   const command = new DeleteObjectCommand({
-    Bucket: AWS_S3_BUCKET,
+    Bucket: bucket,
     Key: key,
   });
 
@@ -129,7 +139,8 @@ async function deleteProfileImageFromS3(url) {
 }
 
 async function uploadProfileImageToS3(buffer, originalName, contentType, userId = null) {
-  if (!AWS_S3_BUCKET) {
+  const { bucket, acl } = getS3Config();
+  if (!bucket) {
     throw new Error('Cannot upload to S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable uploads.');
   }
 
@@ -139,7 +150,7 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
 
   const key = getS3ObjectKey(originalName, userId);
   const commandParams = {
-    Bucket: AWS_S3_BUCKET,
+    Bucket: bucket,
     Key: key,
     Body: buffer,
     ContentType: contentType || 'application/octet-stream',
@@ -147,8 +158,8 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
     ContentDisposition: 'inline',
   };
 
-  if (AWS_S3_ACL) {
-    commandParams.ACL = AWS_S3_ACL;
+  if (acl) {
+    commandParams.ACL = acl;
   }
 
   const sendUploadCommand = async (params) => {
@@ -160,7 +171,7 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
     await sendUploadCommand(commandParams);
   } catch (error) {
     const message = String(error?.message || error || '').toLowerCase();
-    if (AWS_S3_ACL && message.includes('acl') && message.includes('not allow')) {
+    if (acl && message.includes('acl') && message.includes('not allow')) {
       console.warn('[s3Service] ACL rejected by bucket, retrying upload without ACL');
       delete commandParams.ACL;
       await sendUploadCommand(commandParams);
@@ -172,12 +183,31 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
   return {
     key,
     url: getPublicUrl(key),
-  }; 
+  };
+}
+
+async function replaceProfileImageInS3(buffer, originalName, contentType, userId = null, previousUrl = null) {
+  const { bucket } = getS3Config();
+  if (!bucket) {
+    throw new Error('Cannot replace S3 profile image because AWS_S3_BUCKET is not configured.');
+  }
+
+  try {
+    if (previousUrl && typeof previousUrl === 'string' && previousUrl.trim().length > 0) {
+      await deleteProfileImageFromS3(previousUrl);
+    }
+  } catch (error) {
+    console.warn('[s3Service] Failed to delete previous profile image before replacement:', error?.message || error);
+  }
+
+  return uploadProfileImageToS3(buffer, originalName, contentType, userId);
 }
 
 module.exports = {
   uploadProfileImageToS3,
+  replaceProfileImageInS3,
   deleteProfileImageFromS3,
   isS3Configured,
   isS3Url,
+  getS3ObjectKey,
 };
