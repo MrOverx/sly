@@ -41,6 +41,41 @@ describe('s3Service profile image storage', () => {
     expect(isS3Url('https://cdn.example.com/profiles/user-123/profilepic/current.png')).toBe(false);
   });
 
+  it('prefers a public URL for profile images when signed URLs are not explicitly required', async () => {
+    const fakeSignedUrl = 'https://signed.example.com/temporary-image';
+
+    Module._load = function(request, parent, isMain) {
+      if (request === '@aws-sdk/client-s3') {
+        return {
+          S3Client: class S3Client {
+            constructor() {}
+            async send() {
+              return {};
+            }
+          },
+          PutObjectCommand: class PutObjectCommand {},
+          DeleteObjectCommand: class DeleteObjectCommand {},
+          GetObjectCommand: class GetObjectCommand {},
+        };
+      }
+
+      if (request === '@aws-sdk/s3-request-presigner') {
+        return {
+          getSignedUrl: async () => fakeSignedUrl,
+        };
+      }
+
+      return originalLoad.apply(this, [request, parent, isMain]);
+    };
+
+    delete require.cache[s3ServicePath];
+    const { getAccessibleProfileImageUrl } = require('../utils/s3Service');
+
+    await expect(getAccessibleProfileImageUrl('profiles/user-123/profilepic/current.png')).resolves.toBe(
+      'https://test-bucket.s3.amazonaws.com/profiles/user-123/profilepic/current.png',
+    );
+  });
+
   it('loads without crashing when AWS SDK packages are unavailable', () => {
     Module._load = function(request, parent, isMain) {
       if (request === '@aws-sdk/client-s3' || request === '@aws-sdk/s3-request-presigner') {

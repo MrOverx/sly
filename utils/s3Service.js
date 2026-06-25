@@ -141,7 +141,7 @@ function isS3Url(url) {
   return Boolean(getS3ObjectKeyFromUrl(url));
 }
 
-async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600) {
+async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600, preferSignedUrl = false) {
   const { bucket } = getS3Config();
   if (!bucket) {
     return null;
@@ -155,6 +155,11 @@ async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600) {
     return null;
   }
 
+  const publicUrl = getPublicUrl(key);
+  if (!preferSignedUrl) {
+    return publicUrl;
+  }
+
   try {
     ensureS3SdkAvailable('generate signed profile image URLs');
     const command = new GetObjectCommand({
@@ -165,11 +170,11 @@ async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600) {
   } catch (error) {
     if (error?.message?.includes('AWS S3 SDK is not available')) {
       console.warn('[s3Service] Falling back to public URL because S3 SDK is unavailable:', error?.message || error);
-      return getPublicUrl(key);
+      return publicUrl;
     }
 
     console.warn('[s3Service] Failed to generate signed profile image URL:', error?.message || error);
-    return getPublicUrl(key);
+    return publicUrl;
   }
 }
 
