@@ -76,6 +76,38 @@ describe('s3Service profile image storage', () => {
     );
   });
 
+  it('uploads profile images without requiring the presigner module', async () => {
+    Module._load = function(request, parent, isMain) {
+      if (request === '@aws-sdk/client-s3') {
+        return {
+          S3Client: class S3Client {
+            constructor() {}
+            async send() {
+              return {};
+            }
+          },
+          PutObjectCommand: class PutObjectCommand {},
+          DeleteObjectCommand: class DeleteObjectCommand {},
+          GetObjectCommand: class GetObjectCommand {},
+        };
+      }
+
+      if (request === '@aws-sdk/s3-request-presigner') {
+        throw new Error('Cannot find module');
+      }
+
+      return originalLoad.apply(this, [request, parent, isMain]);
+    };
+
+    delete require.cache[s3ServicePath];
+    const { uploadProfileImageToS3 } = require('../utils/s3Service');
+
+    await expect(uploadProfileImageToS3(Buffer.from('test'), 'avatar.png', 'image/png', 'user-123')).resolves.toMatchObject({
+      key: expect.stringContaining('profiles/user-123/profilepic/current.png'),
+      url: expect.stringContaining('https://test-bucket.s3.amazonaws.com/'),
+    });
+  });
+
   it('loads without crashing when AWS SDK packages are unavailable', () => {
     Module._load = function(request, parent, isMain) {
       if (request === '@aws-sdk/client-s3' || request === '@aws-sdk/s3-request-presigner') {

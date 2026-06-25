@@ -1,6 +1,6 @@
 {
   "name": "slyxyserver",
-  "version": "1.80.0",
+  "version": "1.81.0",
   "main": "ws_server.js",
   "scripts": {
     "start": "node ws_server.js",
@@ -12,9 +12,9 @@
   "description": "SLYXY WebSocket Server with DynamoDB Backend",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.330.0",
-    "@aws-sdk/lib-dynamodb": "^3.330.0",
     "@aws-sdk/client-s3": "^3.330.0",
-    "@aws-sdk/s3-request-presigner": "^3.330.0",
+    "@aws-sdk/lib-dynamodb": "^3.330.0",
+    "@aws-sdk/s3-request-presigner": "^3.1075.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -33,7 +33,11 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "testMatch": ["**/__tests__/**/*.js"],
-    "testPathIgnorePatterns": ["/tests/"]
+    "testMatch": [
+      "**/__tests__/**/*.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/tests/"
+    ]
   }
 }

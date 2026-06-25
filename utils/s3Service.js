@@ -13,10 +13,18 @@ try {
   console.warn('[s3Service] AWS S3 client SDK is unavailable:', error?.message || error);
 }
 
-try {
-  ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
-} catch (error) {
-  console.warn('[s3Service] AWS S3 presigner SDK is unavailable:', error?.message || error);
+function getSignedUrlResolver() {
+  if (getSignedUrl) {
+    return getSignedUrl;
+  }
+
+  try {
+    ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
+    return getSignedUrl;
+  } catch (error) {
+    console.warn('[s3Service] AWS S3 presigner SDK is unavailable:', error?.message || error);
+    return null;
+  }
 }
 
 const s3Client = S3Client
@@ -25,9 +33,13 @@ const s3Client = S3Client
     })
   : null;
 
-function ensureS3SdkAvailable(operationName) {
-  if (!s3Client || !PutObjectCommand || !DeleteObjectCommand || !GetObjectCommand || !getSignedUrl) {
-    throw new Error(`AWS S3 SDK is not available; cannot ${operationName}. Install @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner.`);
+function ensureS3SdkAvailable(operationName, requirePresigner = false) {
+  if (!s3Client || !PutObjectCommand || !DeleteObjectCommand || !GetObjectCommand) {
+    throw new Error(`AWS S3 SDK is not available; cannot ${operationName}. Install @aws-sdk/client-s3.`);
+  }
+
+  if (requirePresigner && !getSignedUrlResolver()) {
+    throw new Error(`AWS S3 presigner SDK is not available; cannot ${operationName}. Install @aws-sdk/s3-request-presigner.`);
   }
 }
 
@@ -161,12 +173,13 @@ async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600, p
   }
 
   try {
-    ensureS3SdkAvailable('generate signed profile image URLs');
+    ensureS3SdkAvailable('generate signed profile image URLs', true);
+    const signer = getSignedUrlResolver();
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
     });
-    return await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+    return await signer(s3Client, command, { expiresIn: expiresInSeconds });
   } catch (error) {
     if (error?.message?.includes('AWS S3 SDK is not available')) {
       console.warn('[s3Service] Falling back to public URL because S3 SDK is unavailable:', error?.message || error);
