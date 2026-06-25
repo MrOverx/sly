@@ -1,11 +1,35 @@
 const path = require('path');
 const crypto = require('crypto');
-const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1',
-});
+let S3Client;
+let PutObjectCommand;
+let DeleteObjectCommand;
+let GetObjectCommand;
+let getSignedUrl;
+
+try {
+  ({ S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3'));
+} catch (error) {
+  console.warn('[s3Service] AWS S3 client SDK is unavailable:', error?.message || error);
+}
+
+try {
+  ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
+} catch (error) {
+  console.warn('[s3Service] AWS S3 presigner SDK is unavailable:', error?.message || error);
+}
+
+const s3Client = S3Client
+  ? new S3Client({
+      region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1',
+    })
+  : null;
+
+function ensureS3SdkAvailable(operationName) {
+  if (!s3Client || !PutObjectCommand || !DeleteObjectCommand || !GetObjectCommand || !getSignedUrl) {
+    throw new Error(`AWS S3 SDK is not available; cannot ${operationName}. Install @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner.`);
+  }
+}
 
 function getS3Config() {
   return {
@@ -132,12 +156,18 @@ async function getAccessibleProfileImageUrl(urlOrKey, expiresInSeconds = 3600) {
   }
 
   try {
+    ensureS3SdkAvailable('generate signed profile image URLs');
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
     });
     return await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
   } catch (error) {
+    if (error?.message?.includes('AWS S3 SDK is not available')) {
+      console.warn('[s3Service] Falling back to public URL because S3 SDK is unavailable:', error?.message || error);
+      return getPublicUrl(key);
+    }
+
     console.warn('[s3Service] Failed to generate signed profile image URL:', error?.message || error);
     return getPublicUrl(key);
   }
@@ -148,6 +178,8 @@ async function deleteProfileImageFromS3(url) {
   if (!bucket) {
     throw new Error('Cannot delete from S3 because AWS_S3_BUCKET is not configured. Set AWS_S3_BUCKET in the environment to enable deletes.');
   }
+
+  ensureS3SdkAvailable('delete profile images from S3');
 
   const key = getS3ObjectKeyFromUrl(url);
   if (!key) {
@@ -175,6 +207,8 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
   if (!Buffer.isBuffer(buffer)) {
     throw new Error('uploadProfileImageToS3 requires a Buffer payload');
   }
+
+  ensureS3SdkAvailable('upload profile images to S3');
 
   const key = getS3ObjectKey(originalName, userId);
   const commandParams = {
