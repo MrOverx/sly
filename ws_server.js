@@ -50,6 +50,7 @@ const {
   searchUsers,
   clearExpiredStatuses,
   getFriendRequest,
+  getFriendRequestByRequestId,
   getFriendBetween,
   createFriendRequest,
   updateFriendRequestStatus,
