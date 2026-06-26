@@ -74,6 +74,21 @@ const {
 
 const isDatabaseConnected = isDbConnected;
 
+// Prepare a minimal user object safe for sending to clients over sockets
+function sanitizeUserForClient(user) {
+  if (!user) return null;
+  return {
+    userId: user.userId || null,
+    userName: user.userName || 'User',
+    avatarColor: user.avatarColor || '#128C7E',
+    avatarLetter: user.avatarLetter || (user.userName ? String(user.userName).charAt(0).toUpperCase() : 'U'),
+    profileImageUrl: user.profileImageUrl || null,
+    profileImagePath: user.profileImagePath || null,
+    country: user.country || null,
+    gender: user.gender || 'other',
+  };
+}
+
 // ✅ Import optimization utilities
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
@@ -1495,7 +1510,11 @@ app.post('/friends/add', async (req, res) => {
     const recipientSocketId = userSockets.get(friendId);
     if (recipientSocketId && senderUser) {
       io.to(recipientSocketId).emit('friend_request', {
+        // Nested sender/recipient objects for robust client parsing
         requestId: friendRequest.requestId,
+        sender: sanitizeUserForClient(senderUser),
+        recipient: sanitizeUserForClient(friendUser),
+        // Backwards-compatible flat fields
         userId: userId,
         fromUserId: userId,
         fromUserName: senderUser.userName || 'Unknown',
@@ -1574,8 +1593,17 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     // ✅ Emit socket event to notify the sender if they are online
     const senderSocketId = userSockets.get(friendRequest.userId);
     if (senderSocketId && recipientUser) {
+      // Ensure sender user object is available for richer payload
+      let senderUser = userCache.get(friendRequest.userId);
+      if (!senderUser) {
+        senderUser = await getUserById(friendRequest.userId);
+        if (senderUser) userCache.set(friendRequest.userId, senderUser);
+      }
+
       io.to(senderSocketId).emit('friend_request_accepted', {
         requestId: friendRequest.requestId,
+        sender: sanitizeUserForClient(senderUser),
+        acceptedBy: sanitizeUserForClient(recipientUser),
         userIdAccepted: userId,
         userName: recipientUser.userName || 'Unknown',
       });
@@ -1680,8 +1708,22 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
 
     const recipientSocketId = userSockets.get(friendRequest.friendId);
     if (recipientSocketId) {
+      // Provide nested sender/recipient for client to identify and clear UI
+      let senderUser = userCache.get(friendRequest.userId);
+      if (!senderUser) {
+        senderUser = await getUserById(friendRequest.userId);
+        if (senderUser) userCache.set(friendRequest.userId, senderUser);
+      }
+      let recipientUser = userCache.get(friendRequest.friendId);
+      if (!recipientUser) {
+        recipientUser = await getUserById(friendRequest.friendId);
+        if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
+      }
+
       io.to(recipientSocketId).emit('friend_request_canceled', {
         requestId: friendRequest.requestId,
+        sender: sanitizeUserForClient(senderUser),
+        recipient: sanitizeUserForClient(recipientUser),
         userId: friendRequest.userId,
         fromUserId: friendRequest.userId,
       });
