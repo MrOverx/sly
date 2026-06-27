@@ -244,7 +244,7 @@ if (!isS3Configured()) {
   Logger.warn('upload', 'AWS_S3_BUCKET is not configured. /upload will return S3_CONFIG_MISSING until configured.');
 }
 
-app.post('/upload', upload.single('profileImage'), async (req, res) => {
+app.post('/upload', uploadLimiter, upload.single('profileImage'), async (req, res) => {
   if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
@@ -839,6 +839,7 @@ app.get('/room/by-invite/:code', (req, res) => {
 const registerLimiter = createRateLimiter('register', 3, 60 * 60); // 3 per hour
 const loginLimiter = createRateLimiter('login', 5, 15 * 60); // 5 per 15 minutes
 const deleteAccountLimiter = createRateLimiter('delete-account', 3, 60 * 60); // 3 per hour
+const uploadLimiter = createRateLimiter('upload', 5, 60 * 60); // 5 uploads per hour
 
 
 
