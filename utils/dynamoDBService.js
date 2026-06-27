@@ -722,7 +722,11 @@ async function clearExpiredStatuses(cutoffIso) {
     ddb.send(new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { PK: item.PK, SK: item.SK },
-      UpdateExpression: 'REMOVE status, statusUpdatedAt',
+      UpdateExpression: 'REMOVE #status, #statusUpdatedAt',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+        '#statusUpdatedAt': 'statusUpdatedAt',
+      },
     }))
   );
 

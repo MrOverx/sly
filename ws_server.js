@@ -239,6 +239,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 
+// Create rate limiters before routes that depend on them.
+const registerLimiter = createRateLimiter('register', 3, 60 * 60); // 3 per hour
+const loginLimiter = createRateLimiter('login', 5, 15 * 60); // 5 per 15 minutes
+const deleteAccountLimiter = createRateLimiter('delete-account', 3, 60 * 60); // 3 per hour
+const uploadLimiter = createRateLimiter('upload', 5, 60 * 60); // 5 uploads per hour
+
 // Profile image upload endpoint
 if (!isS3Configured()) {
   Logger.warn('upload', 'AWS_S3_BUCKET is not configured. /upload will return S3_CONFIG_MISSING until configured.');
@@ -834,14 +840,6 @@ app.get('/room/by-invite/:code', (req, res) => {
     });
   }
 });
-
-// ✅ Create rate limiters for auth endpoints
-const registerLimiter = createRateLimiter('register', 3, 60 * 60); // 3 per hour
-const loginLimiter = createRateLimiter('login', 5, 15 * 60); // 5 per 15 minutes
-const deleteAccountLimiter = createRateLimiter('delete-account', 3, 60 * 60); // 3 per hour
-const uploadLimiter = createRateLimiter('upload', 5, 60 * 60); // 5 uploads per hour
-
-
 
 // ========== NEW: REGISTER ENDPOINT ==========
 app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(async (req, res) => {
