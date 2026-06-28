@@ -1355,6 +1355,72 @@ async function getUserStats() {
   };
 }
 
+// Helper function to check friendship status between two users
+async function getFriendshipStatus(userId, friendId) {
+  if (!userId || !friendId) return null;
+
+  // Check if they are already friends (accepted)
+  const friendRecord = await getFriendRequest(userId, friendId);
+  if (friendRecord && String(friendRecord.status || '').toLowerCase() === 'accepted') {
+    return 'FRIEND';
+  }
+
+  // Check reverse direction
+  const reverseFriendRecord = await getFriendRequest(friendId, userId);
+  if (reverseFriendRecord && String(reverseFriendRecord.status || '').toLowerCase() === 'accepted') {
+    return 'FRIEND';
+  }
+
+  // Check if pending request exists
+  if (friendRecord && String(friendRecord.status || '').toLowerCase() === 'pending') {
+    return 'PENDING';
+  }
+  if (reverseFriendRecord && String(reverseFriendRecord.status || '').toLowerCase() === 'pending') {
+    return 'PENDING';
+  }
+
+  return null;
+}
+
+// Helper function to get pending request between two users (either direction)
+async function getFriendRequestBetweenUsers(userId, friendId) {
+  if (!userId || !friendId) return null;
+
+  // Check userId -> friendId
+  const request1 = await getFriendRequest(userId, friendId);
+  if (request1 && String(request1.status || '').toLowerCase() === 'pending') {
+    return request1;
+  }
+
+  // Check friendId -> userId
+  const request2 = await getFriendRequest(friendId, userId);
+  if (request2 && String(request2.status || '').toLowerCase() === 'pending') {
+    return request2;
+  }
+
+  return null;
+}
+
+// Helper function to create an accepted friendship (bidirectional)
+async function createFriendship(userId, friendId) {
+  if (!userId || !friendId) return null;
+
+  const item1 = buildFriendItem(userId, friendId, 'accepted');
+  const item2 = buildFriendItem(friendId, userId, 'accepted');
+
+  if (USE_DEV_STORE) {
+    upsertDevStoreItem(item1);
+    upsertDevStoreItem(item2);
+  } else {
+    await Promise.all([
+      ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item1 })),
+      ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item2 })),
+    ]);
+  }
+
+  return item1;
+}
+
 module.exports = {
   isDbConnected,
   getUserById,
@@ -1393,4 +1459,7 @@ module.exports = {
   getUserStats,
   normalizeProfileImageReference,
   buildProfileImageFields,
+  getFriendshipStatus,
+  getFriendRequestBetweenUsers,
+  createFriendship,
 };

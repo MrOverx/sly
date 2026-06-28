@@ -53,6 +53,9 @@ const {
   getFriendRequestByRequestId,
   getFriendBetween,
   createFriendRequest,
+  getFriendshipStatus,
+  getFriendRequestBetweenUsers,
+  createFriendship,
   updateFriendRequestStatus,
   serializeFriendRequestForClient,
   serializeFriendForClient,
@@ -1562,6 +1565,228 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
     return sendError(res, 500, 'Error canceling friend request', { details: err.message });
+  }
+});
+
+// ========== NEW: SEND/ADD FRIEND REQUEST ENDPOINT ==========
+app.post('/friends/add', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+    const friendId = normalizeId(req.body.friendId || '');
+
+    if (!userId || !friendId) {
+      return sendError(res, 400, 'userId and friendId are required');
+    }
+
+    if (userId === friendId) {
+      return sendError(res, 400, 'Cannot send friend request to yourself');
+    }
+
+    // Check if already friends
+    const existingFriend = await getFriendshipStatus(userId, friendId);
+    if (existingFriend === 'FRIEND') {
+      return sendError(res, 409, 'Already friends');
+    }
+
+    // Check if request already exists
+    const existingRequest = await getFriendRequestBetweenUsers(userId, friendId);
+    if (existingRequest && String(existingRequest.status || '').toLowerCase() === 'pending') {
+      return sendError(res, 409, 'Friend request already pending');
+    }
+
+    // Create friend request
+    const friendRequest = await createFriendRequest(userId, friendId);
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendId);
+
+    Logger.info('friends/add', 'Friend request created', { userId, friendId, requestId: friendRequest.requestId });
+
+    // Get sender and recipient user data for socket event
+    let senderUser = userCache.get(userId);
+    if (!senderUser) {
+      senderUser = await getUserById(userId);
+      if (senderUser) userCache.set(userId, senderUser);
+    }
+
+    let recipientUser = userCache.get(friendId);
+    if (!recipientUser) {
+      recipientUser = await getUserById(friendId);
+      if (recipientUser) userCache.set(friendId, recipientUser);
+    }
+
+    // Emit socket event to recipient
+    const recipientSocketId = userSockets.get(friendId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit('friend_request_received', {
+        requestId: friendRequest.requestId,
+        sender: sanitizeUserForClient(senderUser),
+        fromUserId: userId,
+        message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Friend request sent',
+      requestId: friendRequest.requestId,
+    });
+  } catch (err) {
+    Logger.error('friends/add', 'Error sending friend request', err.message);
+    return sendError(res, 500, 'Error sending friend request', { details: err.message });
+  }
+});
+
+// ========== NEW: ACCEPT FRIEND REQUEST ENDPOINT ==========
+app.post('/friends/request/:requestId/accept', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const requestId = normalizeId(req.params.requestId || '');
+    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+
+    if (!requestId) {
+      return sendError(res, 400, 'requestId is required');
+    }
+    if (!userId) {
+      return sendError(res, 400, 'userId is required');
+    }
+
+    const friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest) {
+      return sendError(res, 404, 'Friend request not found');
+    }
+
+    if (normalizeId(friendRequest.friendId) !== userId) {
+      return sendError(res, 403, 'Not authorized to accept this request');
+    }
+
+    if (String(friendRequest.status || '').toLowerCase() !== 'pending') {
+      return sendError(res, 400, 'Friend request is no longer pending');
+    }
+
+    // Update request status to accepted
+    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'accepted');
+
+    // Create bidirectional friend relationships
+    await createFriendship(friendRequest.userId, friendRequest.friendId);
+    await createFriendship(friendRequest.friendId, friendRequest.userId);
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendRequest.userId);
+
+    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
+
+    // Get updated user data
+    let senderUser = userCache.get(friendRequest.userId);
+    if (!senderUser) {
+      senderUser = await getUserById(friendRequest.userId);
+      if (senderUser) userCache.set(friendRequest.userId, senderUser);
+    }
+
+    let recipientUser = userCache.get(friendRequest.friendId);
+    if (!recipientUser) {
+      recipientUser = await getUserById(friendRequest.friendId);
+      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
+    }
+
+    // Emit socket events
+    const senderSocketId = userSockets.get(friendRequest.userId);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit('friend_request_accepted', {
+        requestId: updatedRequest.requestId,
+        newFriend: sanitizeUserForClient(recipientUser),
+        userId: friendRequest.userId,
+        message: `${recipientUser?.userName || 'Someone'} accepted your friend request`,
+      });
+    }
+
+    // Emit to recipient as well
+    io.to(userId).emit('friend_added', {
+      newFriend: sanitizeUserForClient(senderUser),
+      message: 'Friend request accepted',
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Friend request accepted',
+      request: updatedRequest,
+    });
+  } catch (err) {
+    Logger.error('friends/request/accept', 'Error accepting friend request', err.message);
+    return sendError(res, 500, 'Error accepting friend request', { details: err.message });
+  }
+});
+
+// ========== NEW: DENY FRIEND REQUEST ENDPOINT ==========
+app.post('/friends/request/:requestId/deny', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const requestId = normalizeId(req.params.requestId || '');
+    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+
+    if (!requestId) {
+      return sendError(res, 400, 'requestId is required');
+    }
+    if (!userId) {
+      return sendError(res, 400, 'userId is required');
+    }
+
+    const friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest) {
+      return sendError(res, 404, 'Friend request not found');
+    }
+
+    if (normalizeId(friendRequest.friendId) !== userId) {
+      return sendError(res, 403, 'Not authorized to deny this request');
+    }
+
+    if (String(friendRequest.status || '').toLowerCase() !== 'pending') {
+      return sendError(res, 400, 'Friend request is no longer pending');
+    }
+
+    // Update request status to denied
+    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'denied');
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendRequest.userId);
+
+    Logger.info('friends/request/deny', 'Friend request denied', { userId, requestId });
+
+    // Get updated user data
+    let recipientUser = userCache.get(friendRequest.friendId);
+    if (!recipientUser) {
+      recipientUser = await getUserById(friendRequest.friendId);
+      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
+    }
+
+    // Emit socket event to sender
+    const senderSocketId = userSockets.get(friendRequest.userId);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit('friend_request_denied', {
+        requestId: updatedRequest.requestId,
+        userId: friendRequest.userId,
+        message: `${recipientUser?.userName || 'Someone'} denied your friend request`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Friend request denied',
+      request: updatedRequest,
+    });
+  } catch (err) {
+    Logger.error('friends/request/deny', 'Error denying friend request', err.message);
+    return sendError(res, 500, 'Error denying friend request', { details: err.message });
   }
 });
 
