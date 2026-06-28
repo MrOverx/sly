@@ -342,10 +342,26 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     ? (senderUser?.userName || senderUser?.name || senderId)
     : (recipientUser?.userName || recipientUser?.name || recipientId)) || fromUserId || 'Unknown user';
 
+  const fromUserAvatar = isIncoming
+    ? senderUser?.avatarColor || senderUser?.avatarColor || '#128C7E'
+    : recipientUser?.avatarColor || recipientUser?.avatarColor || '#128C7E';
+
+  const fromUserImage = isIncoming
+    ? senderUser?.profileImageUrl || senderUser?.profileImagePath || null
+    : recipientUser?.profileImageUrl || recipientUser?.profileImagePath || null;
+
+  const senderPayload = senderUser ? serializeFriendForClient(senderUser) : null;
+  const recipientPayload = recipientUser ? serializeFriendForClient(recipientUser) : null;
+
   return {
     requestId,
     fromUserId,
     fromUserName,
+    fromUserAvatar,
+    fromUserImage,
+    profileImageUrl: fromUserImage,
+    sender: senderPayload,
+    recipient: recipientPayload,
     userId: senderId,
     friendId: recipientId,
     recipientUserId: recipientId,
