@@ -24,9 +24,27 @@ const clientOptions = { region: AWS_REGION };
 if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
-// Development fallback: simple JSON-backed store when running locally without DynamoDB
-// This must be explicitly enabled with USE_DEV_STORE=true.
-const USE_DEV_STORE = (process.env.USE_DEV_STORE === 'true') && !DYNAMODB_ENDPOINT;
+function shouldUseDevStoreFallback() {
+  if (process.env.USE_DEV_STORE === 'true') return true;
+  if (DYNAMODB_ENDPOINT) return false;
+
+  const hasExplicitAwsCredentials = Boolean(
+    process.env.AWS_ACCESS_KEY_ID ||
+    process.env.AWS_SECRET_ACCESS_KEY ||
+    process.env.AWS_SESSION_TOKEN ||
+    process.env.AWS_PROFILE ||
+    process.env.AWS_DEFAULT_PROFILE ||
+    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
+    process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
+    process.env.AWS_ROLE_ARN
+  );
+
+  return !hasExplicitAwsCredentials && process.env.NODE_ENV !== 'production';
+}
+
+// Development fallback: simple JSON-backed store when running locally without DynamoDB.
+// It is enabled automatically when no AWS credentials are present so local signup flows still persist data.
+const USE_DEV_STORE = shouldUseDevStoreFallback();
 const DEV_STORE_PATH = path.resolve(__dirname, '..', 'dev_dynamo_users.json');
 
 function loadDevStore() {
@@ -68,6 +86,11 @@ let TABLE_SCHEMA_LOADED = false;
 let TABLE_SCHEMA_PROMISE = null;
 
 async function loadTableSchema() {
+  if (USE_DEV_STORE) {
+    TABLE_SCHEMA_LOADED = true;
+    return;
+  }
+
   if (TABLE_SCHEMA_LOADED) return;
   if (TABLE_SCHEMA_PROMISE) return TABLE_SCHEMA_PROMISE;
 
