@@ -39,7 +39,19 @@ function shouldUseDevStoreFallback() {
     process.env.AWS_ROLE_ARN
   );
 
-  return !hasExplicitAwsCredentials && process.env.NODE_ENV !== 'production';
+  const hasAwsDeploymentHints = Boolean(
+    process.env.DYNAMODB_TABLE ||
+    process.env.AWS_REGION ||
+    process.env.AWS_S3_BUCKET ||
+    process.env.AWS_S3_PUBLIC_URL ||
+    process.env.AWS_S3_PROFILE_FOLDER
+  );
+
+  const useDevStore = !hasExplicitAwsCredentials && !hasAwsDeploymentHints && process.env.NODE_ENV !== 'production';
+  if (useDevStore) {
+    console.warn('[dynamoDBService] Using local dev fallback store because no AWS credentials, no DynamoDB endpoint, and no AWS deployment hints were detected. Set USE_DEV_STORE=true to preserve this behavior or configure AWS credentials to use real DynamoDB.');
+  }
+  return useDevStore;
 }
 
 // Development fallback: simple JSON-backed store when running locally without DynamoDB.

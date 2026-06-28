@@ -38,4 +38,19 @@ describe('Logger sanitization', () => {
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     consoleSpy.mockRestore();
   });
+
+  it('builds a persistable log payload with sanitized data', () => {
+    const payload = Logger._buildPersistPayload(Logger.LOG_LEVELS.INFO, 'auth', 'login', {
+      userId: 'user-123',
+      password: 'secret',
+      safe: 'ok',
+    });
+
+    expect(payload.itemType).toBe('LOG');
+    expect(payload.level).toBe('INFO');
+    expect(payload.context).toBe('auth');
+    expect(payload.message).toBe('login');
+    expect(payload.data.password).toBe('[REDACTED]');
+    expect(payload.data.safe).toBe('ok');
+  });
 });

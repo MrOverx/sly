@@ -1,0 +1,1 @@
+{"PK":"LOG#2026-06-28T08:54:22.698Z","SK":"VERIFICATION#1782636862698#znd0uh","itemType":"LOG","timestamp":"2026-06-28T08:54:22.698Z","level":"INFO","context":"verification","message":"logger persistence smoke test","data":{"userId":"demo"}}
