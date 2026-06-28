@@ -12,6 +12,7 @@ const {
   BatchGetCommand,
   TransactWriteCommand,
 } = require('@aws-sdk/lib-dynamodb');
+const { Logger } = require('./logger');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -25,33 +26,18 @@ if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
 function shouldUseDevStoreFallback() {
-  if (process.env.USE_DEV_STORE === 'true') return true;
+  if (process.env.USE_DEV_STORE === 'true') {
+    console.warn('[dynamoDBService] Local dev fallback store enabled explicitly via USE_DEV_STORE=true');
+    return true;
+  }
+
+  // Explicit local DynamoDB endpoint is still allowed for local development,
+  // but otherwise the server should not silently fall back to a JSON store.
   if (DYNAMODB_ENDPOINT) return false;
 
-  const hasExplicitAwsCredentials = Boolean(
-    process.env.AWS_ACCESS_KEY_ID ||
-    process.env.AWS_SECRET_ACCESS_KEY ||
-    process.env.AWS_SESSION_TOKEN ||
-    process.env.AWS_PROFILE ||
-    process.env.AWS_DEFAULT_PROFILE ||
-    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
-    process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
-    process.env.AWS_ROLE_ARN
-  );
-
-  const hasAwsDeploymentHints = Boolean(
-    process.env.DYNAMODB_TABLE ||
-    process.env.AWS_REGION ||
-    process.env.AWS_S3_BUCKET ||
-    process.env.AWS_S3_PUBLIC_URL ||
-    process.env.AWS_S3_PROFILE_FOLDER
-  );
-
-  const useDevStore = !hasExplicitAwsCredentials && !hasAwsDeploymentHints && process.env.NODE_ENV !== 'production';
-  if (useDevStore) {
-    console.warn('[dynamoDBService] Using local dev fallback store because no AWS credentials, no DynamoDB endpoint, and no AWS deployment hints were detected. Set USE_DEV_STORE=true to preserve this behavior or configure AWS credentials to use real DynamoDB.');
-  }
-  return useDevStore;
+  // Do not use local JSON fallback automatically in development unless requested.
+  // This ensures the app writes only to AWS DynamoDB/S3 when the deployment is configured.
+  return false;
 }
 
 // Development fallback: simple JSON-backed store when running locally without DynamoDB.
@@ -470,6 +456,8 @@ async function getUserByEmail(email) {
     return null;
   }
 
+  await loadTableSchema();
+
   try {
     const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
@@ -485,7 +473,10 @@ async function getUserByEmail(email) {
       return normalizeDdbItem(result.Items[0]);
     }
   } catch (err) {
-    // Query may fail if the GSI is missing or misconfigured; fall through to scan fallback.
+    Logger.warn('dynamoDBService', 'EmailIndex query failed; falling back to scan', {
+      email: emailLower,
+      error: err?.message || err,
+    });
   }
 
   const scan = await ddb.send(new ScanCommand({
@@ -502,7 +493,8 @@ async function getUserByEmail(email) {
   // Legacy fallback: some records may not have emailLower populated.
   const legacyScan = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'attribute_not_exists(emailLower)',
+    FilterExpression: 'attribute_not_exists(emailLower) OR email = :email',
+    ExpressionAttributeValues: { ':email': String(email).trim() },
     Limit: 50,
   }));
 

@@ -1186,9 +1186,16 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
       return sendError(res, 400, 'userId or email is required');
     }
 
-    const user = await findUserByLookup(lookup);
+    Logger.debug('auth/login', 'Looking up user for login', { lookup });
+    let user = await findUserByLookup(lookup);
+
+    if (!user && normalizedEmail) {
+      Logger.debug('auth/login', 'Retrying login lookup by direct email query', { email: normalizedEmail });
+      user = await getUserByEmail(normalizedEmail);
+    }
 
     if (!user) {
+      Logger.warn('auth/login', 'Login failed: no user found for login lookup', { lookup });
       return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
     }
 

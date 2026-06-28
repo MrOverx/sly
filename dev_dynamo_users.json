@@ -1,9 +1,9 @@
 [
   {
-    "PK": "USER#test-guest-1782638347764",
+    "PK": "USER#test-guest-1782639403971",
     "SK": "METADATA",
     "itemType": "USER",
-    "userId": "test-guest-1782638347764",
+    "userId": "test-guest-1782639403971",
     "userName": "GuestUser",
     "userNameLower": "guestuser",
     "email": null,
@@ -29,8 +29,8 @@
     "isActive": true,
     "xp": {},
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-06-28T09:19:07.765Z",
-    "updatedAt": "2026-06-28T09:19:07.765Z",
-    "lastLogin": "2026-06-28T09:19:07.765Z"
+    "createdAt": "2026-06-28T09:36:43.972Z",
+    "updatedAt": "2026-06-28T09:36:43.972Z",
+    "lastLogin": "2026-06-28T09:36:43.972Z"
   }
 ]
