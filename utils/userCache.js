@@ -191,9 +191,24 @@ class UserCache {
 // Export singleton instance
 const userCache = new UserCache(5 * 60 * 1000); // 5 minute TTL
 
-// Run cleanup every 30 seconds
-setInterval(() => {
-  userCache.cleanup();
-}, 30 * 1000);
+// Periodic cleanup interval (disabled during tests to avoid open handles)
+let _cleanupInterval = null;
+function startPeriodicCleanup(intervalMs = 30 * 1000) {
+  if (_cleanupInterval) return;
+  _cleanupInterval = setInterval(() => {
+    userCache.cleanup();
+  }, intervalMs);
+}
+
+function stopPeriodicCleanup() {
+  if (_cleanupInterval) {
+    clearInterval(_cleanupInterval);
+    _cleanupInterval = null;
+  }
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  startPeriodicCleanup();
+}
 
 module.exports = { UserCache, userCache };

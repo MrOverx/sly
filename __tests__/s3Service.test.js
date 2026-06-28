@@ -7,6 +7,10 @@ describe('s3Service profile image storage', () => {
   beforeEach(() => {
     process.env.AWS_S3_BUCKET = 'test-bucket';
     process.env.AWS_REGION = 'us-east-1';
+    // Provide dummy AWS credentials to prevent the SDK from attempting to load
+    // real credentials during unit tests which would cause failures.
+    process.env.AWS_ACCESS_KEY_ID = 'testing';
+    process.env.AWS_SECRET_ACCESS_KEY = 'testing';
     delete require.cache[s3ServicePath];
   });
 
@@ -15,6 +19,8 @@ describe('s3Service profile image storage', () => {
     delete require.cache[s3ServicePath];
     delete process.env.AWS_S3_BUCKET;
     delete process.env.AWS_REGION;
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
   });
 
   it('uses a stable object key for the current profile image of a user', () => {
@@ -43,30 +49,22 @@ describe('s3Service profile image storage', () => {
 
   it('prefers a public URL for profile images when signed URLs are not explicitly required', async () => {
     const fakeSignedUrl = 'https://signed.example.com/temporary-image';
+    jest.resetModules();
+    jest.doMock('@aws-sdk/client-s3', () => ({
+      S3Client: class S3Client {
+        constructor() {}
+        async send() {
+          return {};
+        }
+      },
+      PutObjectCommand: class PutObjectCommand {},
+      DeleteObjectCommand: class DeleteObjectCommand {},
+      GetObjectCommand: class GetObjectCommand {},
+    }));
 
-    Module._load = function(request, parent, isMain) {
-      if (request === '@aws-sdk/client-s3') {
-        return {
-          S3Client: class S3Client {
-            constructor() {}
-            async send() {
-              return {};
-            }
-          },
-          PutObjectCommand: class PutObjectCommand {},
-          DeleteObjectCommand: class DeleteObjectCommand {},
-          GetObjectCommand: class GetObjectCommand {},
-        };
-      }
-
-      if (request === '@aws-sdk/s3-request-presigner') {
-        return {
-          getSignedUrl: async () => fakeSignedUrl,
-        };
-      }
-
-      return originalLoad.apply(this, [request, parent, isMain]);
-    };
+    jest.doMock('@aws-sdk/s3-request-presigner', () => ({
+      getSignedUrl: async () => fakeSignedUrl,
+    }));
 
     delete require.cache[s3ServicePath];
     const { getAccessibleProfileImageUrl } = require('../utils/s3Service');
@@ -77,27 +75,23 @@ describe('s3Service profile image storage', () => {
   });
 
   it('uploads profile images without requiring the presigner module', async () => {
-    Module._load = function(request, parent, isMain) {
-      if (request === '@aws-sdk/client-s3') {
-        return {
-          S3Client: class S3Client {
-            constructor() {}
-            async send() {
-              return {};
-            }
-          },
-          PutObjectCommand: class PutObjectCommand {},
-          DeleteObjectCommand: class DeleteObjectCommand {},
-          GetObjectCommand: class GetObjectCommand {},
-        };
-      }
+    jest.resetModules();
+    jest.doMock('@aws-sdk/client-s3', () => ({
+      S3Client: class S3Client {
+        constructor() {}
+        async send() {
+          return {};
+        }
+      },
+      PutObjectCommand: class PutObjectCommand {},
+      DeleteObjectCommand: class DeleteObjectCommand {},
+      GetObjectCommand: class GetObjectCommand {},
+    }));
 
-      if (request === '@aws-sdk/s3-request-presigner') {
-        throw new Error('Cannot find module');
-      }
-
-      return originalLoad.apply(this, [request, parent, isMain]);
-    };
+    // Simulate missing presigner by making the module factory throw when required
+    jest.doMock('@aws-sdk/s3-request-presigner', () => {
+      throw new Error('Cannot find module');
+    });
 
     delete require.cache[s3ServicePath];
     const { uploadProfileImageToS3 } = require('../utils/s3Service');

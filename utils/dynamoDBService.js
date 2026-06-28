@@ -208,6 +208,26 @@ function toIso(value) {
   return Number.isNaN(numeric) ? null : new Date(numeric).toISOString();
 }
 
+function shouldPreserveProtectedField(field, value) {
+  if (value === undefined) return true;
+  if (field === 'email' || field === 'emailLower' || field === 'passwordHash' || field === 'userId') {
+    if (value === null) return true;
+    if (typeof value === 'string' && value.trim().length === 0) return true;
+  }
+  return false;
+}
+
+function sanitizeUserUpdates(updates = {}) {
+  const sanitized = {};
+  Object.entries(updates).forEach(([field, value]) => {
+    if (shouldPreserveProtectedField(field, value)) {
+      return;
+    }
+    sanitized[field] = value;
+  });
+  return sanitized;
+}
+
 function buildUserItem(user) {
   if (!user || !user.userId) {
     throw new Error('User item requires userId');
@@ -615,17 +635,19 @@ async function updateUserById(userId, updates) {
   const current = await getUserById(userId);
   if (!current) return null;
 
+  const safeUpdates = sanitizeUserUpdates(updates);
+
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    if (updates.email) {
-      const normalizedEmail = normalizeEmail(updates.email);
+    if (safeUpdates.email) {
+      const normalizedEmail = normalizeEmail(safeUpdates.email);
       const existingByEmail = items.find((u) => u.emailLower === normalizedEmail && String(u.userId) !== String(userId));
       if (existingByEmail) throw new Error('EMAIL_CONFLICT');
     }
 
-    const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
-    if (updates.email) {
-      const emailValue = String(updates.email).trim();
+    const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
+    if (safeUpdates.email) {
+      const emailValue = String(safeUpdates.email).trim();
       const normalizedEmail = normalizeEmail(emailValue);
       merged.email = emailValue;
       merged.emailLower = normalizedEmail;
@@ -639,17 +661,17 @@ async function updateUserById(userId, updates) {
     return normalizeDdbItem(item);
   }
 
-  if (updates.email) {
-    const normalizedEmail = normalizeEmail(updates.email);
+  if (safeUpdates.email) {
+    const normalizedEmail = normalizeEmail(safeUpdates.email);
     const existingByEmail = await getUserByEmail(normalizedEmail);
     if (existingByEmail && existingByEmail.userId !== userId) {
       throw new Error('EMAIL_CONFLICT');
     }
   }
 
-  const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
-  if (updates.email) {
-    const emailValue = String(updates.email).trim();
+  const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
+  if (safeUpdates.email) {
+    const emailValue = String(safeUpdates.email).trim();
     const normalizedEmail = normalizeEmail(emailValue);
     merged.email = emailValue;
     merged.emailLower = normalizedEmail;

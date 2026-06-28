@@ -13,6 +13,42 @@ class Logger {
   };
 
   static _currentLevel = Logger.LOG_LEVELS.INFO;
+  static _rateLimitBuckets = new Map();
+  static _rateLimitWindowMs = 5000;
+  static _rateLimitMaxEntries = 1;
+
+  static sensitiveKeys = ['password', 'token', 'secret', 'authorization', 'cookie', 'apikey', 'session', 'email'];
+
+  static sanitizeData(data, depth = 0) {
+    if (depth > 3 || data === null || data === undefined) {
+      return data;
+    }
+
+    if (typeof data === 'string') {
+      return data.length > 1200 ? `${data.slice(0, 1200)}… [truncated ${data.length - 1200} chars]` : data;
+    }
+
+    if (data instanceof Error) {
+      return { name: data.name, message: data.message };
+    }
+
+    if (Array.isArray(data)) {
+      return data.slice(0, 10).map(item => this.sanitizeData(item, depth + 1));
+    }
+
+    if (typeof data === 'object') {
+      const sanitized = {};
+      for (const [key, value] of Object.entries(data)) {
+        const lowerKey = String(key).toLowerCase();
+        sanitized[key] = this.sensitiveKeys.some(fragment => lowerKey.includes(fragment))
+          ? '[REDACTED]'
+          : this.sanitizeData(value, depth + 1);
+      }
+      return sanitized;
+    }
+
+    return data;
+  }
 
   /**
    * Set minimum log level for filtering output
@@ -35,10 +71,26 @@ class Logger {
     const timestamp = new Date().toISOString();
     const levelName = Object.keys(this.LOG_LEVELS).find(k => this.LOG_LEVELS[k] === level);
     const logEntry = `[${timestamp}] [${levelName}] [${context}] ${message}`;
+    const sanitizedData = data === null || data === undefined ? null : this.sanitizeData(data);
+    const bucketKey = `${level}:${context}:${message}`;
+    const now = Date.now();
+    const existingBucket = this._rateLimitBuckets.get(bucketKey);
+
+    if (existingBucket && now - existingBucket.lastSeen < this._rateLimitWindowMs) {
+      existingBucket.count += 1;
+      existingBucket.lastSeen = now;
+      return;
+    }
+
+    if (existingBucket && now - existingBucket.lastSeen >= this._rateLimitWindowMs) {
+      this._rateLimitBuckets.delete(bucketKey);
+    }
+
+    this._rateLimitBuckets.set(bucketKey, { count: 1, lastSeen: now });
 
     const logFn = level === this.LOG_LEVELS.ERROR ? console.error : console.log;
-    if (data) {
-      logFn(logEntry, data);
+    if (sanitizedData !== null) {
+      logFn(logEntry, sanitizedData);
     } else {
       logFn(logEntry);
     }
