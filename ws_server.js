@@ -1251,6 +1251,13 @@ app.post('/auth/send-otp', sendOtpLimiter, asyncHandler(async (req, res) => {
 
   try {
     const normalizedEmail = String(email).toLowerCase().trim();
+    
+    // ✅ Check if email already exists
+    const existingUser = await getUserByEmail(normalizedEmail);
+    if (existingUser) {
+      return sendError(res, 409, 'Account with this email already exists. Please login instead.', 'EMAIL_ALREADY_EXISTS');
+    }
+    
     const otp = await createOtpForEmail(normalizedEmail);
 
     sendOtpEmail(normalizedEmail, otp)
@@ -1284,6 +1291,32 @@ app.post('/auth/send-otp', sendOtpLimiter, asyncHandler(async (req, res) => {
     }
 
     return sendError(res, 500, message, { code: 'OTP_SEND_ERROR', details: err?.message });
+  }
+}));
+
+// ✅ NEW: Check if email is available for signup (frontend can use this before sending OTP)
+app.post('/auth/check-email-available', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { email } = req.body;
+  if (!email || typeof email !== 'string' || email.trim() === '') {
+    return sendError(res, 400, 'Email is required', 'INVALID_EMAIL');
+  }
+
+  try {
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const existingUser = await getUserByEmail(normalizedEmail);
+    
+    if (existingUser) {
+      return sendSuccess(res, { available: false }, 'Email is already registered');
+    }
+    
+    return sendSuccess(res, { available: true }, 'Email is available');
+  } catch (err) {
+    Logger.error('auth/check-email-available', 'Error checking email availability', err.message);
+    return sendError(res, 500, 'Unable to check email availability', { details: err.message });
   }
 }));
 
@@ -1489,10 +1522,12 @@ app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
     const guestName = `Guest${Math.floor(Math.random() * 9000) + 1000}`;
 
     // ✅ Create guest user (auto-expire after 24 hours)
+    // Generate temporary email for guest to maintain database integrity
+    const guestEmail = `guest_${guestId}@guest.slyxy.local`;
     const guestUser = await createUser({
       userId: guestId,
       userName: guestName,
-      email: null,
+      email: guestEmail,
       authType: 'GUEST',
       isGuest: true,
       gender: 'other',

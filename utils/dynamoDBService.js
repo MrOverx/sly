@@ -646,6 +646,12 @@ async function createUser(userData) {
     throw new Error('User data must include userId');
   }
 
+  // Email is required for non-guest users
+  const isGuest = Boolean(userData.isGuest);
+  if (!isGuest && (!userData.email || String(userData.email).trim().length === 0)) {
+    throw new Error('Email is required for non-guest users');
+  }
+
   await loadTableSchema();
   if (USE_DEV_STORE) {
     const items = loadDevStore();
