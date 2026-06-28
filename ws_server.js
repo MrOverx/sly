@@ -1498,7 +1498,27 @@ app.get('/user/:userId', async (req, res) => {
   return handleGetUserProfile(req, res);
 });
 
-const VALID_GENDERS = ['male', 'female', 'other'];
+// ========== FRIEND REQUEST CANCEL ENDPOINT ==========
+app.post('/friends/request/:requestId/cancel', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const requestId = normalizeId(req.params.requestId || '');
+    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+
+    if (!requestId) {
+      return sendError(res, 400, 'requestId is required');
+    }
+    if (!userId) {
+      return sendError(res, 400, 'userId is required');
+    }
+
+    const friendRequest = await getFriendRequestByRequestId(requestId);
+    if (!friendRequest) {
+      return sendError(res, 404, 'Friend request not found');
+    }
 
     // Only the sender can cancel a pending friend request
     if (normalizeId(friendRequest.userId) !== userId) {
