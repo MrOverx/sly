@@ -308,6 +308,58 @@ function buildFriendItem(userId, friendId, status = 'pending') {
   };
 }
 
+function serializeFriendRequestForClient(request, currentUserId, senderUser = null, recipientUser = null) {
+  if (!request) return null;
+
+  const senderId = normalizeIdValue(request.userId || request.senderId || request.fromUserId || null);
+  const recipientId = normalizeIdValue(request.friendId || request.recipientId || request.toUserId || null);
+  const requestId = normalizeIdValue(request.requestId || `${senderId}|${recipientId}`);
+  const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
+
+  const fromUserId = isIncoming ? senderId : recipientId;
+  const fromUserName = (isIncoming
+    ? (senderUser?.userName || senderUser?.name || senderId)
+    : (recipientUser?.userName || recipientUser?.name || recipientId)) || fromUserId || 'Unknown user';
+
+  return {
+    requestId,
+    fromUserId,
+    fromUserName,
+    userId: senderId,
+    friendId: recipientId,
+    recipientUserId: recipientId,
+    status: request.status || 'pending',
+    createdAt: request.createdAt || null,
+  };
+}
+
+function serializeFriendForClient(user) {
+  if (!user) return null;
+
+  const userId = normalizeIdValue(user.userId || user.friendId || user.id || null);
+  const displayName = user.userName || user.name || userId || 'User';
+  return {
+    userId,
+    id: userId,
+    friendId: userId,
+    userName: displayName,
+    avatarColor: user.avatarColor || '#128C7E',
+    avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
+    profileImageUrl: user.profileImageUrl || null,
+    profileImagePath: user.profileImagePath || null,
+    country: user.country || null,
+    gender: user.gender || 'other',
+    status: user.status || null,
+    createdAt: user.createdAt || null,
+    updatedAt: user.updatedAt || null,
+  };
+}
+
+function normalizeIdValue(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+}
+
 function buildBlockItem(userId, blockedByUserId, data = {}) {
   const blockedUntil = data.blockedUntil ? toIso(data.blockedUntil) : null;
   const expiresAt = data.expiresAt ? (data.expiresAt instanceof Date ? Math.floor(data.expiresAt.getTime() / 1000) : Number(data.expiresAt)) : null;
@@ -756,8 +808,46 @@ async function clearExpiredStatuses(cutoffIso) {
   return result.Items.length;
 }
 
+function getDevStoreFriendItems() {
+  if (!USE_DEV_STORE) return null;
+  const items = loadDevStore();
+  return Array.isArray(items) ? items.filter((item) => item?.itemType === 'FRIEND') : [];
+}
+
+function upsertDevStoreItem(item) {
+  if (!USE_DEV_STORE || !item) return null;
+  const items = loadDevStore();
+  const key = item.userId ? `user:${String(item.userId)}` : (item.PK && item.SK ? `${String(item.PK)}:${String(item.SK)}` : null);
+  if (!key) {
+    items.push(item);
+    saveDevStore(items);
+    return item;
+  }
+
+  const filtered = items.filter((existing) => {
+    if (item.userId && existing?.userId && String(existing.userId) === String(item.userId) && String(existing.itemType || '') === 'USER') {
+      return false;
+    }
+    if (item.PK && item.SK && existing?.PK && existing?.SK && String(existing.PK) === String(item.PK) && String(existing.SK) === String(item.SK)) {
+      return false;
+    }
+    return true;
+  });
+
+  filtered.push(item);
+  saveDevStore(filtered);
+  return item;
+}
+
 async function getFriendRequest(userId, friendId) {
   if (!userId || !friendId) return null;
+
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const found = items.find((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
+    return found ? normalizeDdbItem(found) : null;
+  }
+
   const result = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`) }));
   return result.Item || null;
 }
@@ -765,10 +855,21 @@ async function getFriendRequest(userId, friendId) {
 async function getFriendBetween(userId, friendId) {
   let request = await getFriendRequest(userId, friendId);
   if (request) return request;
-  return ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, friendId, `${FRIEND_PREFIX}${userId}`) })).then((res) => res.Item || null);
+  return getFriendRequest(friendId, userId);
 }
 
 async function createFriendRequest(userId, friendId) {
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const existing = items.find((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
+    if (existing) return existing;
+
+    const item = buildFriendItem(userId, friendId, 'pending');
+    if (!TABLE_HAS_SORT_KEY) delete item.SK;
+    upsertDevStoreItem(item);
+    return item;
+  }
+
   const item = buildFriendItem(userId, friendId, 'pending');
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
@@ -777,12 +878,31 @@ async function createFriendRequest(userId, friendId) {
 async function updateFriendRequestStatus(userId, friendId, status) {
   const current = await getFriendRequest(userId, friendId);
   if (!current) return null;
+
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const index = items.findIndex((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
+    if (index === -1) return null;
+
+    const updated = { ...items[index], status, updatedAt: new Date().toISOString() };
+    items[index] = updated;
+    upsertDevStoreItem(updated);
+    return normalizeDdbItem(updated);
+  }
+
   const updated = { ...current, status, updatedAt: new Date().toISOString() };
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: updated }));
   return updated;
 }
 
 async function deleteFriendRequest(userId, friendId) {
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const filtered = items.filter((item) => !(String(item.userId) === String(userId) && String(item.friendId) === String(friendId)));
+    saveDevStore(filtered);
+    return filtered;
+  }
+
   return ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`) }));
 }
 
@@ -792,6 +912,11 @@ async function getFriendRequestByRequestId(requestId) {
     .trim()
     .replace(/^"+|"+$/g, '')
     .replace(/^'+|'+$/g, '');
+
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    return items.find((item) => String(item.requestId) === normalizedRequestId) || null;
+  }
 
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
@@ -810,6 +935,16 @@ async function getFriendRequestByRequestId(requestId) {
 }
 
 async function deleteFriendRelationship(userId, friendId) {
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const filtered = items.filter((item) => !(
+      (String(item.userId) === String(userId) && String(item.friendId) === String(friendId)) ||
+      (String(item.userId) === String(friendId) && String(item.friendId) === String(userId))
+    ));
+    saveDevStore(filtered);
+    return items.length - filtered.length;
+  }
+
   const primary = getFriendRequest(userId, friendId);
   const reverse = getFriendRequest(friendId, userId);
   const requests = await Promise.all([primary, reverse]);
@@ -822,6 +957,12 @@ async function deleteFriendRelationship(userId, friendId) {
 
 async function queryFriendRequestsBySender(userId) {
   if (!userId) return [];
+
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    return items.filter((item) => String(item.userId) === String(userId) && String(item.status || '').toLowerCase() === 'pending');
+  }
+
   await loadTableSchema();
 
   const hashKeyName = TABLE_HASH_KEY;
@@ -863,6 +1004,11 @@ async function queryFriendRequestsBySender(userId) {
 async function queryFriendRequestsByRecipient(userId) {
   if (!userId) return [];
 
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    return items.filter((item) => String(item.friendId) === String(userId) && String(item.status || '').toLowerCase() === 'pending');
+  }
+
   const executeQuery = async () => ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     IndexName: 'FriendByFriendIdIndex',
@@ -901,6 +1047,18 @@ async function queryFriendRequestsByRecipient(userId) {
 
 async function listFriendsForUser(userId) {
   if (!userId) return [];
+
+  if (USE_DEV_STORE) {
+    const items = getDevStoreFriendItems();
+    const friendIds = [];
+    for (const item of items) {
+      if (String(item.status || '').toLowerCase() !== 'accepted') continue;
+      if (String(item.userId) === String(userId)) friendIds.push(String(item.friendId));
+      if (String(item.friendId) === String(userId)) friendIds.push(String(item.userId));
+    }
+    return [...new Set(friendIds)];
+  }
+
   await loadTableSchema();
 
   const hashKeyName = TABLE_HASH_KEY;
@@ -1164,6 +1322,8 @@ module.exports = {
   getFriendRequestByRequestId,
   getFriendBetween,
   createFriendRequest,
+  serializeFriendRequestForClient,
+  serializeFriendForClient,
   updateFriendRequestStatus,
   deleteFriendRequest,
   deleteFriendRelationship,

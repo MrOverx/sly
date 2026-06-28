@@ -1,6 +1,38 @@
-const { buildUserItem } = require('../utils/dynamoDBService');
+const { buildUserItem, serializeFriendRequestForClient, serializeFriendForClient } = require('../utils/dynamoDBService');
 
 describe('DynamoDB user item profile image normalization', () => {
+  it('serializes incoming friend requests for the recipient view', () => {
+    const payload = serializeFriendRequestForClient(
+      { userId: 'user-a', friendId: 'user-b', requestId: 'user-a|user-b', status: 'pending' },
+      'user-b',
+      { userId: 'user-a', userName: 'Alice' },
+      null,
+    );
+
+    expect(payload).toMatchObject({
+      requestId: 'user-a|user-b',
+      fromUserId: 'user-a',
+      fromUserName: 'Alice',
+      status: 'pending',
+    });
+  });
+
+  it('serializes accepted friends as minimal friend records', () => {
+    const payload = serializeFriendForClient({
+      userId: 'user-c',
+      userName: 'Charlie',
+      avatarColor: '#123456',
+      profileImageUrl: 'https://example.com/avatar.png',
+    });
+
+    expect(payload).toMatchObject({
+      userId: 'user-c',
+      userName: 'Charlie',
+      avatarColor: '#123456',
+      profileImageUrl: 'https://example.com/avatar.png',
+    });
+  });
+
   it('should nullify oversized profileImageUrl values when building a user item', () => {
     const oversizedUrl = 'http://' + 'a'.repeat(20001);
     const item = buildUserItem({

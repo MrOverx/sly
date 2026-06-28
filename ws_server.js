@@ -54,6 +54,8 @@ const {
   getFriendBetween,
   createFriendRequest,
   updateFriendRequestStatus,
+  serializeFriendRequestForClient,
+  serializeFriendForClient,
   deleteFriendRequest,
   deleteFriendRelationship,
   queryFriendRequestsBySender,
@@ -792,6 +794,227 @@ function normalizeId(id) {
     return '';
   }
 }
+
+// ========== FRIEND REQUESTS & FRIENDS ENDPOINTS ==========
+app.post('/friends/add', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  const friendId = normalizeId(req.body.friendId);
+
+  if (!userId || !friendId) {
+    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  }
+
+  if (String(userId) === String(friendId)) {
+    return sendError(res, 400, 'You cannot send a friend request to yourself', 'VALIDATION_ERROR');
+  }
+
+  const recipientUser = await getUserById(friendId);
+  if (!recipientUser) {
+    return sendError(res, 404, 'Recipient user not found', 'USER_NOT_FOUND');
+  }
+
+  const existing = await getFriendBetween(userId, friendId);
+  if (existing) {
+    if (existing.status === 'accepted') {
+      return sendSuccess(res, {
+        request: existing,
+        alreadyFriends: true,
+      }, 'You are already friends');
+    }
+
+    return sendSuccess(res, {
+      request: existing,
+      alreadyRequested: true,
+    }, 'Friend request already exists');
+  }
+
+  const request = await createFriendRequest(userId, friendId);
+  return sendSuccess(res, {
+    request: {
+      ...request,
+      requestId: request.requestId,
+    },
+    requestId: request.requestId,
+  }, 'Friend request sent');
+}));
+
+app.get('/friends/list', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+  }
+
+  const friendIds = await listFriendsForUser(userId);
+  const friends = [];
+
+  for (const friendId of friendIds) {
+    const friendUser = await getUserById(friendId);
+    if (friendUser) {
+      friends.push(serializeFriendForClient(friendUser));
+    }
+  }
+
+  return sendSuccess(res, {
+    friends,
+    count: friends.length,
+  }, 'Friends loaded successfully');
+}));
+
+app.get('/friends/requests/incoming', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+  }
+
+  const requests = await queryFriendRequestsByRecipient(userId);
+  const normalizedRequests = [];
+
+  for (const request of requests) {
+    const senderUser = await getUserById(request.userId);
+    const payload = serializeFriendRequestForClient(request, userId, senderUser, null);
+    if (payload) normalizedRequests.push(payload);
+  }
+
+  return sendSuccess(res, {
+    requests: normalizedRequests,
+    count: normalizedRequests.length,
+  }, 'Incoming friend requests loaded');
+}));
+
+app.get('/friends/requests/outgoing', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+  }
+
+  const requests = await queryFriendRequestsBySender(userId);
+  const normalizedRequests = [];
+
+  for (const request of requests) {
+    const recipientUser = await getUserById(request.friendId);
+    const payload = serializeFriendRequestForClient(request, userId, null, recipientUser);
+    if (payload) normalizedRequests.push(payload);
+  }
+
+  return sendSuccess(res, {
+    requests: normalizedRequests,
+    count: normalizedRequests.length,
+  }, 'Outgoing friend requests loaded');
+}));
+
+app.post('/friends/request/:requestId/accept', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  const requestId = normalizeId(req.params.requestId);
+
+  if (!userId || !requestId) {
+    return sendError(res, 400, 'userId and requestId are required', 'VALIDATION_ERROR');
+  }
+
+  const request = await getFriendRequestByRequestId(requestId);
+  if (!request) {
+    return sendError(res, 404, 'Friend request not found', 'REQUEST_NOT_FOUND');
+  }
+
+  if (String(request.friendId) !== String(userId)) {
+    return sendError(res, 403, 'You can only accept requests sent to you', 'FORBIDDEN');
+  }
+
+  if (request.status === 'accepted') {
+    return sendSuccess(res, { request, alreadyAccepted: true }, 'Friend request already accepted');
+  }
+
+  const updatedRequest = await updateFriendRequestStatus(request.userId, request.friendId, 'accepted');
+  return sendSuccess(res, {
+    request: updatedRequest,
+    friendId: request.userId,
+  }, 'Friend request accepted');
+}));
+
+app.post('/friends/request/:requestId/deny', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  const requestId = normalizeId(req.params.requestId);
+
+  if (!userId || !requestId) {
+    return sendError(res, 400, 'userId and requestId are required', 'VALIDATION_ERROR');
+  }
+
+  const request = await getFriendRequestByRequestId(requestId);
+  if (!request) {
+    return sendError(res, 404, 'Friend request not found', 'REQUEST_NOT_FOUND');
+  }
+
+  if (String(request.friendId) !== String(userId)) {
+    return sendError(res, 403, 'You can only deny requests sent to you', 'FORBIDDEN');
+  }
+
+  const updatedRequest = await updateFriendRequestStatus(request.userId, request.friendId, 'denied');
+  return sendSuccess(res, { request: updatedRequest }, 'Friend request denied');
+}));
+
+app.post('/friends/request/:requestId/cancel', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  const requestId = normalizeId(req.params.requestId);
+
+  if (!userId || !requestId) {
+    return sendError(res, 400, 'userId and requestId are required', 'VALIDATION_ERROR');
+  }
+
+  const request = await getFriendRequestByRequestId(requestId);
+  if (!request) {
+    return sendError(res, 404, 'Friend request not found', 'REQUEST_NOT_FOUND');
+  }
+
+  if (String(request.userId) !== String(userId)) {
+    return sendError(res, 403, 'You can only cancel requests you sent', 'FORBIDDEN');
+  }
+
+  await deleteFriendRequest(request.userId, request.friendId);
+  return sendSuccess(res, { requestId }, 'Friend request canceled');
+}));
+
+app.post('/friends/remove', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  const friendId = normalizeId(req.body.friendId);
+
+  if (!userId || !friendId) {
+    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  }
+
+  const removedCount = await deleteFriendRelationship(userId, friendId);
+  return sendSuccess(res, { removedCount }, 'Friend removed');
+}));
 
 // Simple lookup endpoint to help debug join-by-invite behavior from clients
 app.get('/room/by-invite/:code', (req, res) => {
