@@ -1626,6 +1626,8 @@ app.post('/friends/add', async (req, res) => {
         requestId: friendRequest.requestId,
         sender: sanitizeUserForClient(senderUser),
         fromUserId: userId,
+        fromUserName: senderUser?.userName || senderUser?.name || userId,
+        fromUserImage: senderUser?.profileImageUrl || senderUser?.profileImagePath || null,
         message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
       });
     }
