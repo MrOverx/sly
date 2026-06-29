@@ -141,6 +141,10 @@ function buildCompleteUserProfile(user) {
   };
 }
 
+function buildFriendRequestPayload(request, currentUserId, senderUser = null, recipientUser = null) {
+  return serializeFriendRequestForClient(request, currentUserId, senderUser, recipientUser);
+}
+
 // ✅ Import optimization utilities
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
@@ -1534,12 +1538,10 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
         if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
       }
 
+      const canceledPayload = buildFriendRequestPayload(friendRequest, friendRequest.friendId, senderUser, recipientUser);
       io.to(recipientSocketId).emit('friend_request_canceled', {
-        requestId: friendRequest.requestId,
-        sender: sanitizeUserForClient(senderUser),
-        recipient: sanitizeUserForClient(recipientUser),
-        userId: friendRequest.userId,
-        fromUserId: friendRequest.userId,
+        ...canceledPayload,
+        message: `${senderUser?.userName || 'Someone'} canceled their friend request`,
       });
     }
 
@@ -1604,15 +1606,12 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
-    // Emit socket event to recipient
+    // Emit socket event to recipient with normalized request payload
     const recipientSocketId = userSockets.get(friendId);
+    const requestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_request_received', {
-        requestId: friendRequest.requestId,
-        sender: sanitizeUserForClient(senderUser),
-        fromUserId: userId,
-        fromUserName: senderUser?.userName || senderUser?.name || userId,
-        fromUserImage: senderUser?.profileImageUrl || senderUser?.profileImagePath || null,
+        ...requestPayload,
         message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
       });
     }
@@ -1620,6 +1619,7 @@ app.post('/friends/add', async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
+      request: requestPayload,
       requestId: friendRequest.requestId,
     });
   } catch (err) {
@@ -1660,6 +1660,17 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
 
     // Update request status to accepted
     const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'accepted');
+    if (!updatedRequest) {
+      Logger.error('friends/request/accept', 'Failed to update friend request status', { userId, requestId });
+      return sendError(res, 500, 'Failed to update friend request status');
+    }
+
+    // Validate requestId before using
+    const finalRequestId = updatedRequest.requestId || friendRequest.requestId || requestId;
+    if (!finalRequestId) {
+      Logger.error('friends/request/accept', 'No valid requestId found', { userId, requestId });
+      return sendError(res, 500, 'Failed to retrieve request ID');
+    }
 
     // Create bidirectional friend relationships
     await createFriendship(friendRequest.userId, friendRequest.friendId);
@@ -1668,9 +1679,9 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     userCache.invalidate(userId);
     userCache.invalidate(friendRequest.userId);
 
-    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
+    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId: finalRequestId });
 
-    // Get updated user data
+    // Get updated user data with complete profile
     let senderUser = userCache.get(friendRequest.userId);
     if (!senderUser) {
       senderUser = await getUserById(friendRequest.userId);
@@ -1683,22 +1694,25 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
     }
 
-    // Emit socket events
+    // Emit socket events with normalized friend request payload to the sender
     const senderSocketId = userSockets.get(friendRequest.userId);
+    const acceptedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
-        requestId: updatedRequest.requestId,
+        ...acceptedPayload,
         newFriend: sanitizeUserForClient(recipientUser),
-        userId: friendRequest.userId,
         message: `${recipientUser?.userName || 'Someone'} accepted your friend request`,
       });
     }
 
-    // Emit to recipient as well
-    io.to(userId).emit('friend_added', {
-      newFriend: sanitizeUserForClient(senderUser),
-      message: 'Friend request accepted',
-    });
+    // Notify the recipient about the new friend relationship if connected
+    const recipientSocketId = userSockets.get(userId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit('friend_added', {
+        newFriend: sanitizeUserForClient(senderUser),
+        message: 'Friend request accepted',
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -1750,18 +1764,24 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     Logger.info('friends/request/deny', 'Friend request denied', { userId, requestId });
 
     // Get updated user data
+    let senderUser = userCache.get(friendRequest.userId);
+    if (!senderUser) {
+      senderUser = await getUserById(friendRequest.userId);
+      if (senderUser) userCache.set(friendRequest.userId, senderUser);
+    }
+
     let recipientUser = userCache.get(friendRequest.friendId);
     if (!recipientUser) {
       recipientUser = await getUserById(friendRequest.friendId);
       if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
     }
 
-    // Emit socket event to sender
+    // Emit socket event to sender with normalized request payload
     const senderSocketId = userSockets.get(friendRequest.userId);
+    const deniedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_denied', {
-        requestId: updatedRequest.requestId,
-        userId: friendRequest.userId,
+        ...deniedPayload,
         message: `${recipientUser?.userName || 'Someone'} denied your friend request`,
       });
     }
@@ -1807,6 +1827,24 @@ app.post('/friends/remove', async (req, res) => {
     userCache.invalidate(friendId);
 
     Logger.info('friends/remove', 'Friend removed', { userId, friendId });
+
+    const userSocketId = userSockets.get(userId);
+    const friendSocketId = userSockets.get(friendId);
+    if (userSocketId) {
+      io.to(userSocketId).emit('friend_removed', {
+        userId,
+        friendId,
+        message: 'Friend removed',
+      });
+    }
+    if (friendSocketId) {
+      io.to(friendSocketId).emit('friend_removed', {
+        userId: friendId,
+        friendId: userId,
+        message: 'A friend removed you',
+      });
+    }
+
 
     return res.status(200).json({
       success: true,
@@ -1943,21 +1981,7 @@ app.get('/friends/requests/incoming', async (req, res) => {
     const requestsList = incomingRequests.map((request) => {
       const normalizedSenderId = normalizeId(request.userId);
       const sender = normalizedSenderId ? senderUserMap.get(normalizedSenderId) : null;
-      const requestId = normalizeId(request.requestId) ||
-        (request.userId && request.friendId ? `${normalizeId(request.userId)}|${normalizeId(request.friendId)}` : '');
-      return {
-        requestId,
-        userId: normalizedSenderId,
-        id: normalizedSenderId,
-        friendId: normalizedSenderId,
-        userName: sender?.userName || 'Unknown',
-        avatarColor: sender?.avatarColor,
-        avatarLetter: sender?.avatarLetter || (sender?.userName || 'U').charAt(0).toUpperCase(),
-        profileImageUrl: sender?.profileImageUrl,
-        gender: sender?.gender || 'other',
-        country: sender?.country || null,
-        createdAt: request.createdAt,
-      };
+      return serializeFriendRequestForClient(request, userId, sender, null);
     });
 
     return res.status(200).json({
@@ -1988,29 +2012,28 @@ app.get('/friends/requests/outgoing', async (req, res) => {
     // Get all outgoing friend requests (where user is the sender)
     const outgoingRequests = await queryFriendRequestsBySender(userId);
 
-    // Get recipient user details
+    // Get sender and recipient user details
+    let senderUser = userCache.get(userId);
+    if (!senderUser) {
+      senderUser = await getUserById(userId);
+      if (senderUser) userCache.set(userId, senderUser);
+    }
+
     const recipientIds = outgoingRequests.map((r) => r.friendId);
     const recipientUsers = await getUsersByIds(recipientIds);
+    const recipientUserMap = new Map();
+    for (const user of recipientUsers) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        recipientUserMap.set(normalizedId, user);
+      }
+    }
 
     // Map requests to include recipient details
     const requestsList = outgoingRequests.map((request) => {
       const normalizedRecipientId = normalizeId(request.friendId);
-      const recipient = recipientUsers.find((u) => normalizeId(u.userId) === normalizedRecipientId);
-      const requestId = normalizeId(request.requestId) ||
-        (request.userId && request.friendId ? `${normalizeId(request.userId)}|${normalizeId(request.friendId)}` : '');
-      return {
-        requestId,
-        userId: normalizedRecipientId,
-        id: normalizedRecipientId,
-        friendId: normalizedRecipientId,
-        userName: recipient?.userName || 'Unknown',
-        avatarColor: recipient?.avatarColor,
-        avatarLetter: recipient?.avatarLetter || (recipient?.userName || 'U').charAt(0).toUpperCase(),
-        profileImageUrl: recipient?.profileImageUrl,
-        gender: recipient?.gender || 'other',
-        country: recipient?.country || null,
-        createdAt: request.createdAt,
-      };
+      const recipient = normalizedRecipientId ? recipientUserMap.get(normalizedRecipientId) : null;
+      return serializeFriendRequestForClient(request, userId, senderUser, recipient);
     });
 
     return res.status(200).json({
