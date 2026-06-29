@@ -55,8 +55,8 @@ const {
   createFriendRequest,
   getFriendshipStatus,
   getFriendRequestBetweenUsers,
-  createFriendship,
   updateFriendRequestStatus,
+  acceptFriendRequestTransaction,
   serializeFriendRequestForClient,
   serializeFriendForClient,
   deleteFriendRequest,
@@ -1424,10 +1424,51 @@ async function handleGetUserProfile(req, res) {
 
     const friendCount = await countFriendsForUser(userId);
 
+    // Fetch friend IDs and minimal friend profiles to include in the user payload
+    const friendIds = await listFriendsForUser(userId);
+    let friends = [];
+    if (Array.isArray(friendIds) && friendIds.length) {
+      try {
+        const friendUsers = await getUsersByIds(friendIds);
+        friends = (friendUsers || []).map((fu) => buildCompleteUserProfile(fu) || sanitizeUserForClient(fu));
+      } catch (err) {
+        Logger.warn('user/get', 'Failed to fetch friend profiles', { userId, error: err && err.message });
+      }
+    }
+
+    // Fetch pending friend requests (incoming and outgoing) so client can populate notifications
+    const pendingIncoming = await queryFriendRequestsByRecipient(userId);
+    const pendingOutgoing = await queryFriendRequestsBySender(userId);
+
+    // Gather related user IDs to enrich request payloads
+    const relatedUserIds = new Set();
+    (pendingIncoming || []).forEach((r) => { if (r.userId) relatedUserIds.add(String(r.userId)); if (r.friendId) relatedUserIds.add(String(r.friendId)); });
+    (pendingOutgoing || []).forEach((r) => { if (r.userId) relatedUserIds.add(String(r.userId)); if (r.friendId) relatedUserIds.add(String(r.friendId)); });
+    const relatedUsers = relatedUserIds.size ? await getUsersByIds(Array.from(relatedUserIds)) : [];
+    const relatedById = {};
+    (relatedUsers || []).forEach((u) => { if (u && u.userId) relatedById[String(u.userId)] = u; });
+
+    const serializeRequests = (items, currentUserId) => {
+      if (!Array.isArray(items)) return [];
+      return items.map((req) => {
+        const sender = relatedById[String(req.userId)] || null;
+        const recipient = relatedById[String(req.friendId)] || null;
+        return buildFriendRequestPayload(req, currentUserId, sender, recipient);
+      });
+    };
+
+    const pending = {
+      incoming: serializeRequests(pendingIncoming, userId),
+      outgoing: serializeRequests(pendingOutgoing, userId),
+    };
+
     return sendSuccess(res, {
       user: {
         ...buildCompleteUserProfile(user),
         friendCount,
+        friendIds,
+        friends,
+        pendingFriendRequests: pending,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
       },
@@ -1664,28 +1705,21 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       return sendError(res, 400, 'Friend request is no longer pending');
     }
 
-    // Update request status to accepted
-    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'accepted');
-    if (!updatedRequest) {
-      Logger.error('friends/request/accept', 'Failed to update friend request status', { userId, requestId });
-      return sendError(res, 500, 'Failed to update friend request status');
-    }
+    // Atomically accept the friend request and create friendship records
+    const updatedRequest = await acceptFriendRequestTransaction(friendRequest).catch((e) => {
+      Logger.error('friends/request/accept', 'Transaction failed', e && e.message);
+      throw e;
+    });
 
-    // Validate requestId before using
-    const finalRequestId = updatedRequest.requestId || friendRequest.requestId || requestId;
-    if (!finalRequestId) {
-      Logger.error('friends/request/accept', 'No valid requestId found', { userId, requestId });
-      return sendError(res, 500, 'Failed to retrieve request ID');
+    if (!updatedRequest || String(updatedRequest.status || '').toLowerCase() !== 'accepted') {
+      Logger.error('friends/request/accept', 'Failed to accept friend request in transaction', { userId, requestId });
+      return sendError(res, 500, 'Failed to accept friend request');
     }
-
-    // Create bidirectional friend relationships
-    await createFriendship(friendRequest.userId, friendRequest.friendId);
-    await createFriendship(friendRequest.friendId, friendRequest.userId);
 
     userCache.invalidate(userId);
     userCache.invalidate(friendRequest.userId);
 
-    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId: finalRequestId });
+    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
 
     // Get updated user data with complete profile
     let senderUser = userCache.get(friendRequest.userId);

@@ -873,13 +873,19 @@ function upsertDevStoreItem(item) {
     return item;
   }
 
+  // Preserve user records: only replace USER items when the incoming item is also a USER.
+  // For non-USER items (FRIEND, BLOCK, REPORT, etc.) match by PK/SK when available.
   const filtered = items.filter((existing) => {
-    if (item.userId && existing?.userId && String(existing.userId) === String(item.userId) && String(existing.itemType || '') === 'USER') {
+    // If incoming is a USER, replace any existing USER with same userId
+    if (String(item.itemType || '').toUpperCase() === 'USER' && existing?.userId && String(existing.userId) === String(item.userId) && String(existing.itemType || '').toUpperCase() === 'USER') {
       return false;
     }
+
+    // If incoming has explicit PK/SK, replace the exact PK/SK match
     if (item.PK && item.SK && existing?.PK && existing?.SK && String(existing.PK) === String(item.PK) && String(existing.SK) === String(item.SK)) {
       return false;
     }
+
     return true;
   });
 
@@ -1401,24 +1407,85 @@ async function getFriendRequestBetweenUsers(userId, friendId) {
   return null;
 }
 
-// Helper function to create an accepted friendship (bidirectional)
-async function createFriendship(userId, friendId) {
-  if (!userId || !friendId) return null;
+// Atomically accept a friend request and create bidirectional friend records.
+// Uses DynamoDB TransactWrite to ensure request status update and friend puts succeed together.
+async function acceptFriendRequestTransaction(requestItem) {
+  if (!requestItem) return null;
+  const senderId = normalizeIdValue(requestItem.userId || requestItem.senderId || requestItem.fromUserId);
+  const recipientId = normalizeIdValue(requestItem.friendId || requestItem.recipientId || requestItem.toUserId);
+  if (!senderId || !recipientId) return null;
 
-  const item1 = buildFriendItem(userId, friendId, 'accepted');
-  const item2 = buildFriendItem(friendId, userId, 'accepted');
+  const requestKey = buildItemKey(FRIEND_PREFIX, senderId, `${FRIEND_PREFIX}${recipientId}`);
+  const friendItem1 = buildFriendItem(senderId, recipientId, 'accepted');
+  const friendItem2 = buildFriendItem(recipientId, senderId, 'accepted');
 
-  if (USE_DEV_STORE) {
-    upsertDevStoreItem(item1);
-    upsertDevStoreItem(item2);
-  } else {
-    await Promise.all([
-      ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item1 })),
-      ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item2 })),
-    ]);
+  const transactItems = [];
+
+  // Update the original friend request item to 'accepted' only if it is still 'pending'
+  transactItems.push({
+    Update: {
+      TableName: TABLE_NAME,
+      Key: requestKey,
+      UpdateExpression: 'SET #status = :accepted, updatedAt = :now',
+      ConditionExpression: '#status = :pending',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':accepted': 'accepted', ':pending': 'pending', ':now': new Date().toISOString() },
+    }
+  });
+
+  // Put both friend records; allow put even if record already exists (idempotent)
+  transactItems.push({ Put: { TableName: TABLE_NAME, Item: friendItem1 } });
+  transactItems.push({ Put: { TableName: TABLE_NAME, Item: friendItem2 } });
+
+  try {
+    if (USE_DEV_STORE) {
+      // Update local JSON store atomically in memory
+      const items = loadDevStore();
+      // Find the friend request item (PK/SK match)
+      const reqIndex = items.findIndex((it) => it.itemType === 'FRIEND' && String(it.userId) === String(senderId) && String(it.friendId) === String(recipientId));
+      if (reqIndex >= 0) {
+        items[reqIndex].status = 'accepted';
+        items[reqIndex].updatedAt = new Date().toISOString();
+      } else {
+        // Try reverse lookup
+        const revIndex = items.findIndex((it) => it.itemType === 'FRIEND' && String(it.userId) === String(recipientId) && String(it.friendId) === String(senderId));
+        if (revIndex >= 0) {
+          items[revIndex].status = 'accepted';
+          items[revIndex].updatedAt = new Date().toISOString();
+        }
+      }
+
+      // Upsert accepted friend records for both directions into the loaded array
+      const item1 = buildFriendItem(senderId, recipientId, 'accepted');
+      const item2 = buildFriendItem(recipientId, senderId, 'accepted');
+
+      function replaceOrPush(arr, itm) {
+        const existingIndex = arr.findIndex((e) => (e.PK && e.SK && itm.PK && itm.SK && String(e.PK) === String(itm.PK) && String(e.SK) === String(itm.SK)) || (e.itemType === 'FRIEND' && e.userId && e.friendId && String(e.userId) === String(itm.userId) && String(e.friendId) === String(itm.friendId)));
+        if (existingIndex >= 0) arr[existingIndex] = itm;
+        else arr.push(itm);
+      }
+
+      replaceOrPush(items, item1);
+      replaceOrPush(items, item2);
+
+      // Persist the modified store once
+      saveDevStore(items);
+      const updated = Object.assign({}, requestItem, { status: 'accepted', updatedAt: new Date().toISOString() });
+      return updated;
+    }
+
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    // Return an updated request-like object to the caller
+    const updated = Object.assign({}, requestItem, { status: 'accepted', updatedAt: new Date().toISOString() });
+    return updated;
+  } catch (err) {
+    // If conditional check fails, attempt to read the current state and return it
+    if (err && err.name === 'ConditionalCheckFailedException') {
+      const current = await getFriendRequestBetweenUsers(senderId, recipientId);
+      return current || null;
+    }
+    throw err;
   }
-
-  return item1;
 }
 
 module.exports = {
@@ -1461,5 +1528,5 @@ module.exports = {
   buildProfileImageFields,
   getFriendshipStatus,
   getFriendRequestBetweenUsers,
-  createFriendship,
+  acceptFriendRequestTransaction,
 };
