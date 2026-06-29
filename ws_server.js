@@ -95,6 +95,52 @@ function sanitizeUserForClient(user) {
   };
 }
 
+// ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
+// Ensures no profile data is lost during socket updates and API responses
+function buildCompleteUserProfile(user) {
+  if (!user) return null;
+  return {
+    // Basic identifiers
+    userId: user.userId || null,
+    userName: user.userName || 'User',
+    email: user.email || null,
+    
+    // Avatar & display
+    avatarColor: user.avatarColor || '#128C7E',
+    avatarLetter: user.avatarLetter || (user.userName ? String(user.userName).charAt(0).toUpperCase() : 'U'),
+    profileImageUrl: user.profileImageUrl || null,
+    profileImagePath: user.profileImagePath || null,
+    pictureName: user.pictureName || null,
+    useColorProfile: user.useColorProfile !== undefined ? user.useColorProfile : true,
+    
+    // Personal information
+    gender: user.gender || 'other',
+    birthDate: user.birthDate || null,
+    country: user.country || null,
+    
+    // Profile content
+    status: user.status || null,
+    bio: user.bio || null,
+    interests: Array.isArray(user.interests) ? user.interests : [],
+    
+    // Engagement & XP
+    xp: user.xp || {},
+    likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
+    
+    // Account status
+    authType: user.authType || 'email',
+    isGuest: user.isGuest || false,
+    isOnline: user.isOnline || false,
+    isFriend: user.isFriend || false,
+    hasProfileChanged: user.hasProfileChanged !== undefined ? user.hasProfileChanged : false,
+    profileComplete: user.profileComplete !== undefined ? user.profileComplete : false,
+    
+    // Metadata
+    timestamp: Date.now(),
+  };
+}
+
 // ✅ Import optimization utilities
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
@@ -916,21 +962,7 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
 
     return sendSuccess(res, {
       user: {
-        userId: savedUser.userId,
-        userName: savedUser.userName,
-        email: savedUser.email,
-        authType: savedUser.authType,
-        isGuest: savedUser.isGuest,
-        avatarColor: savedUser.avatarColor,
-        gender: savedUser.gender,
-        country: savedUser.country,
-        status: savedUser.status,
-        bio: savedUser.bio,
-        interests: savedUser.interests,
-        profileImageUrl: savedUser.profileImageUrl,
-        pictureName: savedUser.pictureName || null,
-        profileComplete: savedUser.profileComplete,
-        xp: getUserXp(savedUser),
+        ...buildCompleteUserProfile(savedUser),
         lastLogin: savedUser.lastLogin,
         createdAt: savedUser.createdAt,
       },
@@ -1002,22 +1034,9 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
 
     return sendSuccess(res, {
       user: {
-        userId: user.userId,
-        userName: user.userName,
-        email: user.email,
-        authType: user.authType,
-        isGuest: user.isGuest,
-        gender: user.gender,
-        country: user.country,
-        status: user.status || null,
-        bio: user.bio || null,
-        interests: Array.isArray(user.interests) ? user.interests : [],
-        avatarColor: user.avatarColor,
-        profileImageUrl: user.profileImageUrl,
-        profileComplete: user.profileComplete || false,
-        xp: getUserXp(user),
-        lastLogin: user.lastLogin,
-        createdAt: user.createdAt,
+        ...buildCompleteUserProfile(currentUser),
+        lastLogin: currentUser.lastLogin,
+        createdAt: currentUser.createdAt,
       },
     }, 'Login successful');
   } catch (err) {
@@ -1337,17 +1356,7 @@ app.post('/auth/guest-login', guestLimiter, asyncHandler(async (req, res) => {
 
     return sendSuccess(res, {
       user: {
-        userId: guestUser.userId,
-        userName: guestUser.userName,
-        authType: 'GUEST',
-        isGuest: true,
-        gender: guestUser.gender,
-        country: guestUser.country,
-        status: guestUser.status || null,
-        bio: guestUser.bio || null,
-        interests: Array.isArray(guestUser.interests) ? guestUser.interests : [],
-        avatarColor: guestUser.avatarColor,
-        profileImageUrl: guestUser.profileImageUrl,
+        ...buildCompleteUserProfile(guestUser),
         lastLogin: guestUser.lastLogin,
       },
     }, 'Guest account created');
@@ -1407,21 +1416,8 @@ async function handleGetUserProfile(req, res) {
 
     return sendSuccess(res, {
       user: {
-        userId: user.userId,
-        userName: user.userName,
-        email: user.email,
-        authType: user.authType,
-        isGuest: user.isGuest,
-        gender: user.gender,
-        country: user.country,
-        status: user.status || null,
-        bio: user.bio || null,
-        interests: Array.isArray(user.interests) ? user.interests : [],
-        avatarColor: user.avatarColor,
-        profileImageUrl: user.profileImageUrl,
-        xp: getUserXp(user),
+        ...buildCompleteUserProfile(user),
         friendCount,
-        profileComplete: user.profileComplete || false,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
       },
@@ -1469,18 +1465,7 @@ app.get('/users/search', async (req, res) => {
     });
 
     return res.status(200).json(users.map((user) => ({
-      userId: user.userId,
-      userName: user.userName,
-      email: user.email,
-      authType: user.authType,
-      isGuest: user.isGuest || false,
-      gender: user.gender,
-      country: user.country,
-      status: user.status || null,
-      bio: user.bio || null,
-      interests: Array.isArray(user.interests) ? user.interests : [],
-      isOnline: false,
-      xp: getUserXp(user),
+      ...buildCompleteUserProfile(user),
       createdAt: user.createdAt,
       lastLogin: user.lastLogin,
     })));
@@ -2327,22 +2312,10 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       Logger.warn('user/update', 'Failed to sync socket metadata', { userId, error: syncErr && syncErr.message });
     }
 
-    // ✅ BROADCAST: Notify connected clients of the profile change
+    // ✅ BROADCAST: Notify connected clients of the profile change with ALL fields
     try {
-      io.emit('profile_update', {
-        userId: user.userId,
-        userName: user.userName,
-        avatarColor: user.avatarColor,
-        profileImageUrl: user.profileImageUrl,
-        profileImagePath: user.profileImagePath || null,
-        status: user.status || null,
-        bio: user.bio || null,
-        interests: Array.isArray(user.interests) ? user.interests : [],
-        gender: user.gender,
-        country: user.country,
-        timestamp: Date.now(),
-      });
-      Logger.info('user/update', '✅ Broadcast profile_update to connected clients', { userId });
+      io.emit('profile_update', buildCompleteUserProfile(user));
+      Logger.info('user/update', '✅ Broadcast profile_update to connected clients with all fields', { userId });
     } catch (broadcastErr) {
       Logger.warn('user/update', 'Failed to broadcast profile_update', { userId, error: broadcastErr && broadcastErr.message });
     }
@@ -2363,22 +2336,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     });
 
     return sendSuccess(res, {
-      user: {
-        userId: user.userId,
-        userName: user.userName,
-        email: user.email,
-        gender: user.gender,
-        country: user.country,
-        status: user.status || null,
-        bio: user.bio || null,
-        interests: Array.isArray(user.interests) ? user.interests : [],
-        avatarColor: user.avatarColor,
-        profileImageUrl: user.profileImageUrl,
-        profileComplete: user.profileComplete || false,
-        xp: getUserXp(user),
-        birthDate: user.birthDate,
-        authType: user.authType,
-      },
+      user: buildCompleteUserProfile(user),
     }, 'User profile updated successfully');
   } catch (err) {
     Logger.error('user/update', 'Error updating user', err.message);
