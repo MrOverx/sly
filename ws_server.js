@@ -83,11 +83,14 @@ const isDatabaseConnected = isDbConnected;
 // Prepare a minimal user object safe for sending to clients over sockets
 function sanitizeUserForClient(user) {
   if (!user) return null;
+  const displayName = user.userName || user.name || user.displayName || 'User';
   return {
-    userId: user.userId || null,
-    userName: user.userName || 'User',
+    userId: user.userId || user.id || user._id || null,
+    userName: displayName,
+    name: displayName,
+    displayName: displayName,
     avatarColor: user.avatarColor || '#128C7E',
-    avatarLetter: user.avatarLetter || (user.userName ? String(user.userName).charAt(0).toUpperCase() : 'U'),
+    avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImageUrl: user.profileImageUrl || null,
     profileImagePath: user.profileImagePath || null,
     country: user.country || null,
@@ -99,15 +102,18 @@ function sanitizeUserForClient(user) {
 // Ensures no profile data is lost during socket updates and API responses
 function buildCompleteUserProfile(user) {
   if (!user) return null;
+  const displayName = user.userName || user.name || user.displayName || 'User';
   return {
     // Basic identifiers
-    userId: user.userId || null,
-    userName: user.userName || 'User',
+    userId: user.userId || user.id || user._id || null,
+    userName: displayName,
+    name: displayName,
+    displayName: displayName,
     email: user.email || null,
     
     // Avatar & display
     avatarColor: user.avatarColor || '#128C7E',
-    avatarLetter: user.avatarLetter || (user.userName ? String(user.userName).charAt(0).toUpperCase() : 'U'),
+    avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImageUrl: user.profileImageUrl || null,
     profileImagePath: user.profileImagePath || null,
     pictureName: user.pictureName || null,
@@ -1700,8 +1706,9 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
         ...acceptedPayload,
-        newFriend: sanitizeUserForClient(recipientUser),
-        message: `${recipientUser?.userName || 'Someone'} accepted your friend request`,
+        newFriend:
+          buildCompleteUserProfile(recipientUser) || sanitizeUserForClient(recipientUser),
+        message: `${recipientUser?.userName || recipientUser?.name || 'Someone'} accepted your friend request`,
       });
     }
 
@@ -1709,7 +1716,8 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     const recipientSocketId = userSockets.get(userId);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_added', {
-        newFriend: sanitizeUserForClient(senderUser),
+        newFriend:
+          buildCompleteUserProfile(senderUser) || sanitizeUserForClient(senderUser),
         message: 'Friend request accepted',
       });
     }
