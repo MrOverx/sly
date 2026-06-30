@@ -374,19 +374,36 @@ function serializeFriendForClient(user) {
   if (!user) return null;
 
   const userId = normalizeIdValue(user.userId || user.friendId || user.id || null);
-  const displayName = user.userName || user.name || userId || 'User';
+  const displayName = user.userName || user.name || user.displayName || userId || 'User';
+
   return {
     userId,
     id: userId,
     friendId: userId,
     userName: displayName,
+    name: displayName,
+    displayName: displayName,
+    email: user.email || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
     profileImageUrl: user.profileImageUrl || null,
     profileImagePath: user.profileImagePath || null,
-    country: user.country || null,
+    pictureName: user.pictureName || null,
+    useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
+    country: user.country || null,
     status: user.status || null,
+    bio: user.bio || null,
+    interests: Array.isArray(user.interests) ? user.interests : [],
+    xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
+    likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
+    authType: user.authType || null,
+    isGuest: user.isGuest === true,
+    hasProfileChanged: user.hasProfileChanged === true,
+    isOnline: user.isOnline === true,
+    profileComplete: user.profileComplete === true,
+    lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
   };

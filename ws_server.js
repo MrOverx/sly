@@ -89,12 +89,20 @@ function sanitizeUserForClient(user) {
     userName: displayName,
     name: displayName,
     displayName: displayName,
+    email: user.email || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImageUrl: user.profileImageUrl || null,
     profileImagePath: user.profileImagePath || null,
+    pictureName: user.pictureName || null,
     country: user.country || null,
     gender: user.gender || 'other',
+    status: user.status || null,
+    bio: user.bio || null,
+    interests: Array.isArray(user.interests) ? user.interests : [],
+    authType: user.authType || null,
+    isGuest: user.isGuest === true,
+    isOnline: user.isOnline === true,
   };
 }
 
@@ -135,7 +143,7 @@ function buildCompleteUserProfile(user) {
     lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
     
     // Account status
-    authType: user.authType || 'email',
+    authType: user.authType || 'LOCAL',
     isGuest: user.isGuest || false,
     isOnline: user.isOnline || false,
     isFriend: user.isFriend || false,
@@ -1457,17 +1465,22 @@ async function handleGetUserProfile(req, res) {
       });
     };
 
-    const pending = {
-      incoming: serializeRequests(pendingIncoming, userId),
-      outgoing: serializeRequests(pendingOutgoing, userId),
-    };
+    const incomingRequests = serializeRequests(pendingIncoming, userId);
+    const outgoingRequests = serializeRequests(pendingOutgoing, userId);
+
+    const pending = (incomingRequests.length || outgoingRequests.length)
+      ? {
+          incoming: incomingRequests.length ? incomingRequests : null,
+          outgoing: outgoingRequests.length ? outgoingRequests : null,
+        }
+      : null;
 
     return sendSuccess(res, {
       user: {
         ...buildCompleteUserProfile(user),
         friendCount,
-        friendIds,
-        friends,
+        friendIds: friendIds.length ? friendIds : null,
+        friends: friends.length ? friends : null,
         pendingFriendRequests: pending,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
@@ -1951,22 +1964,17 @@ app.get('/friends/list', async (req, res) => {
     const friendList = orderedFriendUsers.map((u) => {
       const normalizedId = normalizeId(u.userId);
       return {
+        ...buildCompleteUserProfile(u),
         userId: normalizedId,
         id: normalizedId,
         friendId: normalizedId,
-        userName: u.userName,
-        avatarColor: u.avatarColor,
-        avatarLetter: u.avatarLetter || (u.userName ? u.userName.charAt(0).toUpperCase() : 'U'),
-        profileImageUrl: u.profileImageUrl,
-        gender: u.gender || 'other',
-        country: u.country || null,
-        isOnline: userSockets.has(normalizedId), // ✅ Check if user is currently connected
+        isOnline: userSockets.has(normalizedId),
       };
     });
 
     return res.status(200).json({
       success: true,
-      friends: friendList,
+      friends: friendList.length ? friendList : null,
       count: friendList.length,
     });
 
@@ -2029,7 +2037,7 @@ app.get('/friends/requests/incoming', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      requests: requestsList,
+      requests: requestsList.length ? requestsList : null,
       count: requestsList.length,
     });
 
@@ -2081,7 +2089,7 @@ app.get('/friends/requests/outgoing', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      requests: requestsList,
+      requests: requestsList.length ? requestsList : null,
       count: requestsList.length,
     });
 
