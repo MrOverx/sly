@@ -315,34 +315,46 @@ function buildUserItem(user) {
   return item;
 }
 
-function buildFriendItem(userId, friendId, status = 'pending', data = {}) {
-  const item = {
-    ...buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`),
+function buildFriendItem(userId, friendId, status = 'pending') {
+  const normalizedUserId = normalizeIdValue(userId);
+  const normalizedRecipientId = normalizeIdValue(friendId);
+
+  return {
+    ...buildItemKey(FRIEND_PREFIX, normalizedUserId, `${FRIEND_PREFIX}${normalizedRecipientId}`),
     itemType: 'FRIEND',
-    userId,
-    friendId,
-    requestId: `${userId}|${friendId}`,
+    userId: normalizedUserId,
+    senderId: normalizedUserId,
+    friendId: normalizedRecipientId,
+    recipientId: normalizedRecipientId,
+    requestId: `${normalizedUserId}|${normalizedRecipientId}`,
     status,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    friendIndexKey: `FRIEND_BY_FRIEND#${friendId}`,
+    friendIndexKey: `FRIEND_BY_FRIEND#${normalizedRecipientId}`,
   };
+}
 
-  if (data.sender) {
-    item.sender = data.sender;
-  }
-  if (data.recipient) {
-    item.recipient = data.recipient;
-  }
+function normalizeFriendRequestItem(item) {
+  if (!item || item.itemType !== 'FRIEND') return item;
 
-  return item;
+  const normalized = { ...item };
+  if (!normalized.recipientId && normalized.friendId) {
+    normalized.recipientId = normalized.friendId;
+  }
+  if (!normalized.senderId && normalized.userId) {
+    normalized.senderId = normalized.userId;
+  }
+  delete normalized.sender;
+  delete normalized.recipient;
+
+  return normalized;
 }
 
 function serializeFriendRequestForClient(request, currentUserId, senderUser = null, recipientUser = null) {
   if (!request) return null;
 
   const senderId = normalizeIdValue(request.userId || request.senderId || request.fromUserId || null);
-  const recipientId = normalizeIdValue(request.friendId || request.recipientId || request.toUserId || null);
+  const recipientId = normalizeIdValue(request.recipientId || request.friendId || request.recipientUserId || request.toUserId || null);
   const requestId = normalizeIdValue(request.requestId || `${senderId}|${recipientId}`);
   const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
 
@@ -362,8 +374,12 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     ? sourceSender?.profileImageUrl || sourceSender?.profileImagePath || null
     : sourceRecipient?.profileImageUrl || sourceRecipient?.profileImagePath || null;
 
-  const senderPayload = sourceSender ? serializeFriendForClient(sourceSender) : null;
-  const recipientPayload = sourceRecipient ? serializeFriendForClient(sourceRecipient) : null;
+  const senderPayload = sourceSender
+    ? serializeFriendForClient({ ...sourceSender, userId: senderId, id: senderId, friendId: senderId })
+    : null;
+  const recipientPayload = sourceRecipient
+    ? serializeFriendForClient({ ...sourceRecipient, userId: recipientId, id: recipientId, friendId: recipientId })
+    : null;
 
   return {
     requestId,
@@ -375,6 +391,8 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     sender: senderPayload,
     recipient: recipientPayload,
     userId: senderId,
+    senderId,
+    recipientId,
     friendId: recipientId,
     recipientUserId: recipientId,
     status: request.status || 'pending',
@@ -420,40 +438,6 @@ function serializeFriendForClient(user) {
     lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
-  };
-}
-
-function buildUserSnapshot(user) {
-  if (!user) return null;
-  const normalizedUserId = normalizeIdValue(user.userId || user.id || user._id || user.friendId || null);
-  if (!normalizedUserId) return null;
-
-  return {
-    userId: normalizedUserId,
-    userName: user.userName || user.name || user.displayName || normalizedUserId,
-    name: user.name || user.displayName || user.userName || normalizedUserId,
-    displayName: user.displayName || user.name || user.userName || normalizedUserId,
-    email: user.email || null,
-    avatarColor: user.avatarColor || '#128C7E',
-    avatarLetter: user.avatarLetter || String(user.userName || user.name || normalizedUserId).charAt(0).toUpperCase(),
-    profileImageUrl: user.profileImageUrl || null,
-    profileImagePath: user.profileImagePath || null,
-    pictureName: user.pictureName || null,
-    useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
-    gender: user.gender || 'other',
-    birthDate: user.birthDate || null,
-    country: user.country || null,
-    status: user.status || null,
-    bio: user.bio || null,
-    interests: Array.isArray(user.interests) ? user.interests : [],
-    xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
-    likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
-    authType: user.authType || null,
-    isGuest: user.isGuest === true,
-    hasProfileChanged: user.hasProfileChanged === true,
-    isOnline: user.isOnline === true,
-    lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
   };
 }
 
@@ -965,11 +949,11 @@ async function getFriendRequest(userId, friendId) {
   if (USE_DEV_STORE) {
     const items = getDevStoreFriendItems();
     const found = items.find((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
-    return found ? normalizeDdbItem(found) : null;
+    return found ? normalizeFriendRequestItem(normalizeDdbItem(found)) : null;
   }
 
   const result = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`) }));
-  return result.Item || null;
+  return result.Item ? normalizeFriendRequestItem(normalizeDdbItem(result.Item)) : null;
 }
 
 async function getFriendBetween(userId, friendId) {
@@ -978,37 +962,27 @@ async function getFriendBetween(userId, friendId) {
   return getFriendRequest(friendId, userId);
 }
 
-async function createFriendRequest(userId, friendId, senderUser = null, recipientUser = null) {
-  const senderSnapshot = buildUserSnapshot(senderUser);
-  const recipientSnapshot = buildUserSnapshot(recipientUser);
-
+async function createFriendRequest(userId, friendId) {
   if (USE_DEV_STORE) {
     const items = getDevStoreFriendItems();
     const existing = items.find((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
-    if (existing) return existing;
+    if (existing) {
+      const normalizedExisting = normalizeFriendRequestItem(existing);
+      if (normalizedExisting !== existing) {
+        const existingIndex = items.findIndex((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
+        items[existingIndex] = normalizedExisting;
+        saveDevStore(items);
+      }
+      return normalizedExisting;
+    }
 
-    const item = buildFriendItem(userId, friendId, 'pending', {
-      sender: senderSnapshot,
-      recipient: recipientSnapshot,
-    });
+    const item = buildFriendItem(userId, friendId, 'pending');
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
     return item;
   }
 
-  const item = buildFriendItem(userId, friendId, 'pending', {
-    sender: senderSnapshot,
-    recipient: recipientSnapshot,
-  });
-  
-  // ✅ DEBUG: Verify snapshots are included before saving
-  if (senderSnapshot) {
-    console.log(`[createFriendRequest] Storing sender snapshot for userId=${userId}: userName="${senderSnapshot.userName}", gender="${senderSnapshot.gender}"`);
-  }
-  if (recipientSnapshot) {
-    console.log(`[createFriendRequest] Storing recipient snapshot for friendId=${friendId}: userName="${recipientSnapshot.userName}", gender="${recipientSnapshot.gender}"`);
-  }
-  
+  const item = buildFriendItem(userId, friendId, 'pending');
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
@@ -1022,13 +996,13 @@ async function updateFriendRequestStatus(userId, friendId, status) {
     const index = items.findIndex((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
     if (index === -1) return null;
 
-    const updated = { ...items[index], status, updatedAt: new Date().toISOString() };
+    const updated = normalizeFriendRequestItem({ ...items[index], status, updatedAt: new Date().toISOString() });
     items[index] = updated;
     upsertDevStoreItem(updated);
-    return normalizeDdbItem(updated);
+    return updated;
   }
 
-  const updated = { ...current, status, updatedAt: new Date().toISOString() };
+  const updated = normalizeFriendRequestItem({ ...current, status, updatedAt: new Date().toISOString() });
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: updated }));
   return updated;
 }
@@ -1520,6 +1494,42 @@ async function acceptFriendRequestTransaction(requestItem) {
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: friendItem1 } });
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: friendItem2 } });
 
+  // Also update the user records to include friendIds (store only IDs, no snapshots)
+  const senderUserKey = buildItemKey(USER_PREFIX, senderId);
+  const recipientUserKey = buildItemKey(USER_PREFIX, recipientId);
+
+  // Add recipientId to sender's friendIds if not present
+  transactItems.push({
+    Update: {
+      TableName: TABLE_NAME,
+      Key: senderUserKey,
+      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), updatedAt = :now',
+      ConditionExpression: 'attribute_not_exists(friendIds) OR NOT contains(friendIds, :friendId)',
+      ExpressionAttributeValues: {
+        ':emptyList': [],
+        ':toAdd': [recipientId],
+        ':friendId': recipientId,
+        ':now': new Date().toISOString(),
+      },
+    }
+  });
+
+  // Add senderId to recipient's friendIds if not present
+  transactItems.push({
+    Update: {
+      TableName: TABLE_NAME,
+      Key: recipientUserKey,
+      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), updatedAt = :now',
+      ConditionExpression: 'attribute_not_exists(friendIds) OR NOT contains(friendIds, :friendId)',
+      ExpressionAttributeValues: {
+        ':emptyList': [],
+        ':toAdd': [senderId],
+        ':friendId': senderId,
+        ':now': new Date().toISOString(),
+      },
+    }
+  });
+
   try {
     if (USE_DEV_STORE) {
       // Update local JSON store atomically in memory
@@ -1550,6 +1560,29 @@ async function acceptFriendRequestTransaction(requestItem) {
 
       replaceOrPush(items, item1);
       replaceOrPush(items, item2);
+
+      // Update USER records in dev store to include friendIds (ID-only)
+      function upsertFriendIdForUser(arr, targetUserId, newFriendId) {
+        const userIndex = arr.findIndex((e) => e.itemType === 'USER' && (String(e.userId) === String(targetUserId) || (e.PK && e.PK.includes(targetUserId))));
+        if (userIndex >= 0) {
+          const user = arr[userIndex];
+          const existingFriends = Array.isArray(user.friendIds) ? user.friendIds : [];
+          if (!existingFriends.map(String).includes(String(newFriendId))) {
+            user.friendIds = existingFriends.concat([newFriendId]);
+            user.updatedAt = new Date().toISOString();
+            arr[userIndex] = user;
+          }
+        } else {
+          // If no user record found, create a lightweight USER placeholder with friendIds
+          const userItem = buildUserItem({ userId: targetUserId, userName: targetUserId });
+          userItem.friendIds = [newFriendId];
+          userItem.updatedAt = new Date().toISOString();
+          arr.push(userItem);
+        }
+      }
+
+      upsertFriendIdForUser(items, senderId, recipientId);
+      upsertFriendIdForUser(items, recipientId, senderId);
 
       // Persist the modified store once
       saveDevStore(items);

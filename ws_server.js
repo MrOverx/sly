@@ -1432,17 +1432,14 @@ async function handleGetUserProfile(req, res) {
 
     const friendCount = await countFriendsForUser(userId);
 
-    // Fetch friend IDs and minimal friend profiles to include in the user payload
+    // Fetch friend IDs and expose them as lightweight friend references.
     const friendIds = await listFriendsForUser(userId);
-    let friends = [];
-    if (Array.isArray(friendIds) && friendIds.length) {
-      try {
-        const friendUsers = await getUsersByIds(friendIds);
-        friends = (friendUsers || []).map((fu) => buildCompleteUserProfile(fu) || sanitizeUserForClient(fu));
-      } catch (err) {
-        Logger.warn('user/get', 'Failed to fetch friend profiles', { userId, error: err && err.message });
-      }
-    }
+    const friends = Array.isArray(friendIds) && friendIds.length
+      ? friendIds.map((friendId) => ({
+          friendId: String(friendId),
+          addedAt: null,
+        }))
+      : [];
 
     // Fetch pending friend requests (incoming and outgoing) so client can populate notifications
     const pendingIncoming = await queryFriendRequestsByRecipient(userId);
@@ -1649,7 +1646,7 @@ app.post('/friends/add', async (req, res) => {
       return sendError(res, 409, 'Friend request already pending');
     }
 
-    // Get sender and recipient user data for socket event and request snapshot
+    // Get sender and recipient user data for socket event display only
     let senderUser = userCache.get(userId);
     if (!senderUser) {
       senderUser = await getUserById(userId);
@@ -1662,8 +1659,7 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
-    // Create friend request with full profile snapshots
-    const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
+    const friendRequest = await createFriendRequest(userId, friendId);
 
     userCache.invalidate(userId);
     userCache.invalidate(friendId);
