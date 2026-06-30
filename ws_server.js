@@ -1571,21 +1571,21 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
 
     Logger.info('friends/request/cancel', 'Friend request canceled', { userId, requestId });
 
+    // Provide nested sender/recipient for client to identify and clear UI
+    let senderUser = userCache.get(friendRequest.userId);
+    if (!senderUser) {
+      senderUser = await getUserById(friendRequest.userId);
+      if (senderUser) userCache.set(friendRequest.userId, senderUser);
+    }
+    let recipientUser = userCache.get(friendRequest.friendId);
+    if (!recipientUser) {
+      recipientUser = await getUserById(friendRequest.friendId);
+      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
+    }
+
+    const canceledPayload = buildFriendRequestPayload(friendRequest, friendRequest.friendId, senderUser, recipientUser);
     const recipientSocketId = userSockets.get(friendRequest.friendId);
     if (recipientSocketId) {
-      // Provide nested sender/recipient for client to identify and clear UI
-      let senderUser = userCache.get(friendRequest.userId);
-      if (!senderUser) {
-        senderUser = await getUserById(friendRequest.userId);
-        if (senderUser) userCache.set(friendRequest.userId, senderUser);
-      }
-      let recipientUser = userCache.get(friendRequest.friendId);
-      if (!recipientUser) {
-        recipientUser = await getUserById(friendRequest.friendId);
-        if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
-      }
-
-      const canceledPayload = buildFriendRequestPayload(friendRequest, friendRequest.friendId, senderUser, recipientUser);
       io.to(recipientSocketId).emit('friend_request_canceled', {
         ...canceledPayload,
         message: `${senderUser?.userName || 'Someone'} canceled their friend request`,
@@ -1595,6 +1595,7 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request canceled',
+      request: canceledPayload,
     });
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
@@ -1759,7 +1760,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
-      request: updatedRequest,
+      request: acceptedPayload,
     });
   } catch (err) {
     Logger.error('friends/request/accept', 'Error accepting friend request', err.message);
@@ -1831,7 +1832,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
-      request: updatedRequest,
+      request: deniedPayload,
     });
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
