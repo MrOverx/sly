@@ -1456,17 +1456,19 @@ async function handleGetUserProfile(req, res) {
     const relatedById = {};
     (relatedUsers || []).forEach((u) => { if (u && u.userId) relatedById[String(u.userId)] = u; });
 
-    const serializeRequests = (items, currentUserId) => {
+    const serializeRequests = (items, currentUserId, isIncoming = false) => {
       if (!Array.isArray(items)) return [];
       return items.map((req) => {
         const sender = relatedById[String(req.userId)] || null;
         const recipient = relatedById[String(req.friendId)] || null;
-        return buildFriendRequestPayload(req, currentUserId, sender, recipient);
+        const payload = buildFriendRequestPayload(req, currentUserId, sender, recipient);
+        payload.isIncoming = isIncoming;
+        return payload;
       });
     };
 
-    const incomingRequests = serializeRequests(pendingIncoming, userId);
-    const outgoingRequests = serializeRequests(pendingOutgoing, userId);
+    const incomingRequests = serializeRequests(pendingIncoming, userId, true);
+    const outgoingRequests = serializeRequests(pendingOutgoing, userId, false);
 
     const pending = (incomingRequests.length || outgoingRequests.length)
       ? {
@@ -1597,6 +1599,7 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
     }
 
     const canceledPayload = buildFriendRequestPayload(friendRequest, friendRequest.friendId, senderUser, recipientUser);
+    canceledPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
     const recipientSocketId = userSockets.get(friendRequest.friendId);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_request_canceled', {
@@ -1646,15 +1649,7 @@ app.post('/friends/add', async (req, res) => {
       return sendError(res, 409, 'Friend request already pending');
     }
 
-    // Create friend request
-    const friendRequest = await createFriendRequest(userId, friendId);
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendId);
-
-    Logger.info('friends/add', 'Friend request created', { userId, friendId, requestId: friendRequest.requestId });
-
-    // Get sender and recipient user data for socket event
+    // Get sender and recipient user data for socket event and request snapshot
     let senderUser = userCache.get(userId);
     if (!senderUser) {
       senderUser = await getUserById(userId);
@@ -1667,9 +1662,18 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
+    // Create friend request with full profile snapshots
+    const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendId);
+
+    Logger.info('friends/add', 'Friend request created', { userId, friendId, requestId: friendRequest.requestId });
+
     // Emit socket event to recipient with normalized request payload
     const recipientSocketId = userSockets.get(friendId);
     const requestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
+    requestPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_request_received', {
         ...requestPayload,
@@ -1677,10 +1681,13 @@ app.post('/friends/add', async (req, res) => {
       });
     }
 
+    // For sender response, mark as outgoing (isIncoming = false)
+    const senderResponsePayload = {...requestPayload, isIncoming: false};
+
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
-      request: requestPayload,
+      request: senderResponsePayload,
       requestId: friendRequest.requestId,
     });
   } catch (err) {
@@ -1751,6 +1758,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     // Emit socket events with normalized friend request payload to the sender
     const senderSocketId = userSockets.get(friendRequest.userId);
     const acceptedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
+    acceptedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
         ...acceptedPayload,
@@ -1835,6 +1843,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     // Emit socket event to sender with normalized request payload
     const senderSocketId = userSockets.get(friendRequest.userId);
     const deniedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
+    deniedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_denied', {
         ...deniedPayload,
@@ -2032,7 +2041,9 @@ app.get('/friends/requests/incoming', async (req, res) => {
     const requestsList = incomingRequests.map((request) => {
       const normalizedSenderId = normalizeId(request.userId);
       const sender = normalizedSenderId ? senderUserMap.get(normalizedSenderId) : null;
-      return serializeFriendRequestForClient(request, userId, sender, null);
+      const payload = serializeFriendRequestForClient(request, userId, sender, null);
+      payload.isIncoming = true;
+      return payload;
     });
 
     return res.status(200).json({
@@ -2084,7 +2095,9 @@ app.get('/friends/requests/outgoing', async (req, res) => {
     const requestsList = outgoingRequests.map((request) => {
       const normalizedRecipientId = normalizeId(request.friendId);
       const recipient = normalizedRecipientId ? recipientUserMap.get(normalizedRecipientId) : null;
-      return serializeFriendRequestForClient(request, userId, senderUser, recipient);
+      const payload = serializeFriendRequestForClient(request, userId, senderUser, recipient);
+      payload.isIncoming = false;
+      return payload;
     });
 
     return res.status(200).json({

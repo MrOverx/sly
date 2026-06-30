@@ -315,8 +315,8 @@ function buildUserItem(user) {
   return item;
 }
 
-function buildFriendItem(userId, friendId, status = 'pending') {
-  return {
+function buildFriendItem(userId, friendId, status = 'pending', data = {}) {
+  const item = {
     ...buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`),
     itemType: 'FRIEND',
     userId,
@@ -327,6 +327,15 @@ function buildFriendItem(userId, friendId, status = 'pending') {
     updatedAt: new Date().toISOString(),
     friendIndexKey: `FRIEND_BY_FRIEND#${friendId}`,
   };
+
+  if (data.sender) {
+    item.sender = data.sender;
+  }
+  if (data.recipient) {
+    item.recipient = data.recipient;
+  }
+
+  return item;
 }
 
 function serializeFriendRequestForClient(request, currentUserId, senderUser = null, recipientUser = null) {
@@ -337,21 +346,24 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
   const requestId = normalizeIdValue(request.requestId || `${senderId}|${recipientId}`);
   const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
 
+  const sourceSender = senderUser || request.sender || null;
+  const sourceRecipient = recipientUser || request.recipient || null;
+
   const fromUserId = isIncoming ? senderId : recipientId;
   const fromUserName = (isIncoming
-    ? (senderUser?.userName || senderUser?.name || senderId)
-    : (recipientUser?.userName || recipientUser?.name || recipientId)) || fromUserId || 'Unknown user';
+    ? (sourceSender?.userName || sourceSender?.name || senderId)
+    : (sourceRecipient?.userName || sourceRecipient?.name || recipientId)) || fromUserId || 'Unknown user';
 
   const fromUserAvatar = isIncoming
-    ? senderUser?.avatarColor || senderUser?.avatarColor || '#128C7E'
-    : recipientUser?.avatarColor || recipientUser?.avatarColor || '#128C7E';
+    ? sourceSender?.avatarColor || '#128C7E'
+    : sourceRecipient?.avatarColor || '#128C7E';
 
   const fromUserImage = isIncoming
-    ? senderUser?.profileImageUrl || senderUser?.profileImagePath || null
-    : recipientUser?.profileImageUrl || recipientUser?.profileImagePath || null;
+    ? sourceSender?.profileImageUrl || sourceSender?.profileImagePath || null
+    : sourceRecipient?.profileImageUrl || sourceRecipient?.profileImagePath || null;
 
-  const senderPayload = senderUser ? serializeFriendForClient(senderUser) : null;
-  const recipientPayload = recipientUser ? serializeFriendForClient(recipientUser) : null;
+  const senderPayload = sourceSender ? serializeFriendForClient(sourceSender) : null;
+  const recipientPayload = sourceRecipient ? serializeFriendForClient(sourceRecipient) : null;
 
   return {
     requestId,
@@ -367,19 +379,20 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     recipientUserId: recipientId,
     status: request.status || 'pending',
     createdAt: request.createdAt || null,
+    isIncoming,
   };
 }
 
 function serializeFriendForClient(user) {
   if (!user) return null;
 
-  const userId = normalizeIdValue(user.userId || user.friendId || user.id || null);
-  const displayName = user.userName || user.name || user.displayName || userId || 'User';
+  const normalizedUserId = normalizeIdValue(user.userId || user.friendId || user.id || null);
+  const displayName = user.userName || user.name || user.displayName || normalizedUserId || 'User';
 
   return {
-    userId,
-    id: userId,
-    friendId: userId,
+    userId: normalizedUserId,
+    id: normalizedUserId,
+    friendId: normalizedUserId,
     userName: displayName,
     name: displayName,
     displayName: displayName,
@@ -391,6 +404,7 @@ function serializeFriendForClient(user) {
     pictureName: user.pictureName || null,
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
+    birthDate: user.birthDate || null,
     country: user.country || null,
     status: user.status || null,
     bio: user.bio || null,
@@ -406,6 +420,40 @@ function serializeFriendForClient(user) {
     lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
+  };
+}
+
+function buildUserSnapshot(user) {
+  if (!user) return null;
+  const normalizedUserId = normalizeIdValue(user.userId || user.id || user._id || user.friendId || null);
+  if (!normalizedUserId) return null;
+
+  return {
+    userId: normalizedUserId,
+    userName: user.userName || user.name || user.displayName || normalizedUserId,
+    name: user.name || user.displayName || user.userName || normalizedUserId,
+    displayName: user.displayName || user.name || user.userName || normalizedUserId,
+    email: user.email || null,
+    avatarColor: user.avatarColor || '#128C7E',
+    avatarLetter: user.avatarLetter || String(user.userName || user.name || normalizedUserId).charAt(0).toUpperCase(),
+    profileImageUrl: user.profileImageUrl || null,
+    profileImagePath: user.profileImagePath || null,
+    pictureName: user.pictureName || null,
+    useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
+    gender: user.gender || 'other',
+    birthDate: user.birthDate || null,
+    country: user.country || null,
+    status: user.status || null,
+    bio: user.bio || null,
+    interests: Array.isArray(user.interests) ? user.interests : [],
+    xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
+    likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
+    authType: user.authType || null,
+    isGuest: user.isGuest === true,
+    hasProfileChanged: user.hasProfileChanged === true,
+    isOnline: user.isOnline === true,
+    lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
   };
 }
 
@@ -930,19 +978,37 @@ async function getFriendBetween(userId, friendId) {
   return getFriendRequest(friendId, userId);
 }
 
-async function createFriendRequest(userId, friendId) {
+async function createFriendRequest(userId, friendId, senderUser = null, recipientUser = null) {
+  const senderSnapshot = buildUserSnapshot(senderUser);
+  const recipientSnapshot = buildUserSnapshot(recipientUser);
+
   if (USE_DEV_STORE) {
     const items = getDevStoreFriendItems();
     const existing = items.find((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
     if (existing) return existing;
 
-    const item = buildFriendItem(userId, friendId, 'pending');
+    const item = buildFriendItem(userId, friendId, 'pending', {
+      sender: senderSnapshot,
+      recipient: recipientSnapshot,
+    });
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
     return item;
   }
 
-  const item = buildFriendItem(userId, friendId, 'pending');
+  const item = buildFriendItem(userId, friendId, 'pending', {
+    sender: senderSnapshot,
+    recipient: recipientSnapshot,
+  });
+  
+  // ✅ DEBUG: Verify snapshots are included before saving
+  if (senderSnapshot) {
+    console.log(`[createFriendRequest] Storing sender snapshot for userId=${userId}: userName="${senderSnapshot.userName}", gender="${senderSnapshot.gender}"`);
+  }
+  if (recipientSnapshot) {
+    console.log(`[createFriendRequest] Storing recipient snapshot for friendId=${friendId}: userName="${recipientSnapshot.userName}", gender="${recipientSnapshot.gender}"`);
+  }
+  
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
