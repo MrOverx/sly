@@ -301,8 +301,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 
 // Create rate limiters before routes that depend on them.
-const registerLimiter = createRateLimiter('register', 3, 60 * 60); // 3 per hour
-const loginLimiter = createRateLimiter('login', 5, 15 * 60); // 5 per 15 minutes
+const registerLimiter = createRateLimiter('register', 20, 60 * 60); // 20 per hour
+const loginLimiter = createRateLimiter('login', 15, 15 * 60); // 15 per 15 minutes
 const deleteAccountLimiter = createRateLimiter('delete-account', 3, 60 * 60); // 3 per hour
 const uploadLimiter = createRateLimiter('upload', 5, 60 * 60); // 5 uploads per hour
 
@@ -1055,8 +1055,8 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
   }
 }));
 
-const sendOtpLimiter = createRateLimiter('send-otp', 5, 15 * 60); // 5 per 15 minutes
-const verifyOtpLimiter = createRateLimiter('verify-otp', 10, 15 * 60); // 10 per 15 minutes
+const sendOtpLimiter = createRateLimiter('send-otp', 10, 15 * 60); // 10 per 15 minutes
+const verifyOtpLimiter = createRateLimiter('verify-otp', 15, 15 * 60); // 15 per 15 minutes
 
 app.post('/auth/send-otp', sendOtpLimiter, asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {

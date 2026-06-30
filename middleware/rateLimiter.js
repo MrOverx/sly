@@ -55,10 +55,21 @@ function createRateLimiter(name, maxRequests, windowSizeSeconds = 1800) {
   const windowSize = windowSizeSeconds * 1000;
 
   return (req, res, next) => {
-    const ip = req.ip || req.connection.remoteAddress;
-    const userId = req.body?.userId || req.params?.userId || 'anonymous';
-    // Use both IP and userId for more granular limiting
-    const key = `${name}:${ip}:${userId}`;
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const email = typeof req.body?.email === 'string'
+      ? String(req.body.email).toLowerCase().trim()
+      : null;
+    const userId = typeof req.body?.userId === 'string'
+      ? String(req.body.userId).trim()
+      : typeof req.params?.userId === 'string'
+        ? String(req.params?.userId).trim()
+        : null;
+    const headerUserId = typeof req.headers?.['x-user-id'] === 'string'
+      ? String(req.headers['x-user-id']).trim()
+      : null;
+    const identity = email || userId || headerUserId || 'anonymous';
+    // Use IP + actual identity (email/userId) so shared IPs don't block all users.
+    const key = `${name}:${ip}:${identity}`;
     const now = Date.now();
 
     let record = requestLimits.get(key);
