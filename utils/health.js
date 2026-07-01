@@ -198,4 +198,3 @@ class HealthMonitor {
 const healthMonitor = new HealthMonitor();
 
 module.exports = healthMonitor;
-module.exports.HealthMonitor = HealthMonitor;

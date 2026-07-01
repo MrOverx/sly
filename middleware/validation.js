@@ -207,6 +207,98 @@ function validateProfileUpdate(req, res, next) {
       return sendError(res, 400, 'Invalid lastDailyXpAwardedAt value', 'VALIDATION_ERROR');
     }
 
+    // New domain fields validation
+    const { avatarLetter, useColorProfile, likedUserIds, friends: friendsArr, isOnline, isFriend, hasProfileChanged } = req.body;
+
+    if (avatarLetter != null) {
+      if (typeof avatarLetter !== 'string') {
+        return sendError(res, 400, 'Invalid avatarLetter value', 'VALIDATION_ERROR');
+      }
+      const letter = avatarLetter.trim();
+      if (letter.length !== 1 || !/^[A-Za-z]$/.test(letter)) {
+        return sendError(res, 400, 'avatarLetter must be a single ASCII letter', 'VALIDATION_ERROR');
+      }
+    }
+
+    if (useColorProfile != null && typeof useColorProfile !== 'boolean') {
+      return sendError(res, 400, 'Invalid useColorProfile value', 'VALIDATION_ERROR');
+    }
+
+    if (likedUserIds != null) {
+      if (!Array.isArray(likedUserIds)) {
+        return sendError(res, 400, 'likedUserIds must be an array', 'VALIDATION_ERROR');
+      }
+      if (likedUserIds.length > 500) {
+        return sendError(res, 400, 'likedUserIds cannot exceed 500 entries', 'VALIDATION_ERROR');
+      }
+      for (const id of likedUserIds) {
+        if (typeof id !== 'string' || String(id).trim().length === 0) {
+          return sendError(res, 400, 'likedUserIds must contain non-empty strings', 'VALIDATION_ERROR');
+        }
+      }
+    }
+
+    if (friendsArr != null) {
+      if (!Array.isArray(friendsArr)) {
+        return sendError(res, 400, 'friends must be an array', 'VALIDATION_ERROR');
+      }
+      if (friendsArr.length > 1000) {
+        return sendError(res, 400, 'friends cannot exceed 1000 entries', 'VALIDATION_ERROR');
+      }
+      for (const f of friendsArr) {
+        if (!f || typeof f !== 'object') {
+          return sendError(res, 400, 'each friend must be an object', 'VALIDATION_ERROR');
+        }
+        if (!f.friendId || typeof f.friendId !== 'string' || String(f.friendId).trim().length === 0) {
+          return sendError(res, 400, 'friend.friendId is required and must be a non-empty string', 'VALIDATION_ERROR');
+        }
+        if (f.addedAt && isNaN(Date.parse(String(f.addedAt)))) {
+          return sendError(res, 400, 'friend.addedAt must be a valid date string', 'VALIDATION_ERROR');
+        }
+      }
+    }
+
+    if (req.body.friendRequests != null) {
+      if (!Array.isArray(req.body.friendRequests)) {
+        return sendError(res, 400, 'friendRequests must be an array', 'VALIDATION_ERROR');
+      }
+      if (req.body.friendRequests.length > 1000) {
+        return sendError(res, 400, 'friendRequests cannot exceed 1000 entries', 'VALIDATION_ERROR');
+      }
+      for (const request of req.body.friendRequests) {
+        if (!request || typeof request !== 'object') {
+          return sendError(res, 400, 'each friend request must be an object', 'VALIDATION_ERROR');
+        }
+        if (!request.requestId || typeof request.requestId !== 'string' || String(request.requestId).trim().length === 0) {
+          return sendError(res, 400, 'friendRequest.requestId is required and must be a non-empty string', 'VALIDATION_ERROR');
+        }
+        if (!request.friendId || typeof request.friendId !== 'string' || String(request.friendId).trim().length === 0) {
+          return sendError(res, 400, 'friendRequest.friendId is required and must be a non-empty string', 'VALIDATION_ERROR');
+        }
+        if (!request.userId || typeof request.userId !== 'string' || String(request.userId).trim().length === 0) {
+          return sendError(res, 400, 'friendRequest.userId is required and must be a non-empty string', 'VALIDATION_ERROR');
+        }
+        if (request.isIncoming != null && typeof request.isIncoming !== 'boolean') {
+          return sendError(res, 400, 'friendRequest.isIncoming must be a boolean', 'VALIDATION_ERROR');
+        }
+        if (request.status != null && typeof request.status !== 'string') {
+          return sendError(res, 400, 'friendRequest.status must be a string', 'VALIDATION_ERROR');
+        }
+      }
+    }
+
+    if (isOnline != null && typeof isOnline !== 'boolean') {
+      return sendError(res, 400, 'Invalid isOnline value', 'VALIDATION_ERROR');
+    }
+
+    if (isFriend != null && typeof isFriend !== 'boolean') {
+      return sendError(res, 400, 'Invalid isFriend value', 'VALIDATION_ERROR');
+    }
+
+    if (hasProfileChanged != null && typeof hasProfileChanged !== 'boolean') {
+      return sendError(res, 400, 'Invalid hasProfileChanged value', 'VALIDATION_ERROR');
+    }
+
     const sanitizedInterests = Array.isArray(interests)
       ? interests
           .map((item) => String(item).trim())
@@ -304,6 +396,36 @@ function validateProfileUpdate(req, res, next) {
     }
     if (sanitizedLastDailyXpAwardedAt) {
       sanitizedBody.lastDailyXpAwardedAt = sanitizedLastDailyXpAwardedAt;
+    }
+
+    // Add new sanitized fields when present
+    if (avatarLetter && String(avatarLetter).trim().length > 0) {
+      sanitizedBody.avatarLetter = String(avatarLetter).trim().toUpperCase();
+    }
+    if (typeof useColorProfile === 'boolean') {
+      sanitizedBody.useColorProfile = useColorProfile;
+    }
+    if (Array.isArray(likedUserIds)) {
+      sanitizedBody.likedUserIds = likedUserIds
+        .map((i) => String(i).trim())
+        .filter((i) => i.length > 0)
+        .slice(0, 500);
+    }
+    if (Array.isArray(friendsArr)) {
+      sanitizedBody.friends = friendsArr.map((f) => ({
+        friendId: String(f.friendId).trim(),
+        addedAt: f.addedAt ? String(f.addedAt).trim() : undefined,
+      }));
+    }
+    // friendRequests sanitized output removed per request
+    if (typeof isOnline === 'boolean') {
+      sanitizedBody.isOnline = isOnline;
+    }
+    if (typeof isFriend === 'boolean') {
+      sanitizedBody.isFriend = isFriend;
+    }
+    if (typeof hasProfileChanged === 'boolean') {
+      sanitizedBody.hasProfileChanged = hasProfileChanged;
     }
 
     req.body = sanitizedBody;

@@ -80,37 +80,13 @@ const {
 
 const isDatabaseConnected = isDbConnected;
 
-// Prepare a minimal user object safe for sending to clients over sockets
-function sanitizeUserForClient(user) {
-  if (!user) return null;
-  const displayName = user.userName || user.name || user.displayName || 'User';
-  return {
-    userId: user.userId || user.id || user._id || null,
-    userName: displayName,
-    name: displayName,
-    displayName: displayName,
-    email: user.email || null,
-    avatarColor: user.avatarColor || '#128C7E',
-    avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
-    profileImageUrl: user.profileImageUrl || null,
-    profileImagePath: user.profileImagePath || null,
-    pictureName: user.pictureName || null,
-    country: user.country || null,
-    gender: user.gender || 'other',
-    status: user.status || null,
-    bio: user.bio || null,
-    interests: Array.isArray(user.interests) ? user.interests : [],
-    authType: user.authType || null,
-    isGuest: user.isGuest === true,
-    isOnline: user.isOnline === true,
-  };
-}
-
 // ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
-// Ensures no profile data is lost during socket updates and API responses
+// Ensures backend payloads match the expected frontend user schema and aliases.
 function buildCompleteUserProfile(user) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
+  const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
+  const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
   return {
     // Basic identifiers
     userId: user.userId || user.id || user._id || null,
@@ -118,30 +94,42 @@ function buildCompleteUserProfile(user) {
     name: displayName,
     displayName: displayName,
     email: user.email || null,
-    
+
     // Avatar & display
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
-    profileImageUrl: user.profileImageUrl || null,
-    profileImagePath: user.profileImagePath || null,
+    profileImageUrl,
+    profile_image_url: profileImageUrl,
+    profileImagePath,
+    profile_image_path: profileImagePath,
+    avatarUrl: profileImageUrl,
+    avatar_url: profileImageUrl,
+    displayImagePath: profileImagePath,
+    display_image_path: profileImagePath,
+    displayImageUrl: profileImageUrl,
+    display_image_url: profileImageUrl,
     pictureName: user.pictureName || null,
     useColorProfile: user.useColorProfile !== undefined ? user.useColorProfile : true,
-    
+
     // Personal information
     gender: user.gender || 'other',
     birthDate: user.birthDate || null,
     country: user.country || null,
-    
+
     // Profile content
     status: user.status || null,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
-    
+
     // Engagement & XP
-    xp: user.xp || {},
+    xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
+    friends: Array.isArray(user.friends) ? user.friends : [],
+    friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
+    pendingFriendRequests: user.pendingFriendRequests || null,
     lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
-    
+
     // Account status
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest || false,
@@ -149,7 +137,7 @@ function buildCompleteUserProfile(user) {
     isFriend: user.isFriend || false,
     hasProfileChanged: user.hasProfileChanged !== undefined ? user.hasProfileChanged : false,
     profileComplete: user.profileComplete !== undefined ? user.profileComplete : false,
-    
+
     // Metadata
     timestamp: Date.now(),
   };
@@ -384,7 +372,7 @@ app.post('/upload', uploadLimiter, upload.single('profileImage'), async (req, re
         url: uploaded.url,
         key: uploaded.key,
         profileImageUrl: updatedUser?.profileImageUrl || uploaded.url,
-        user: updatedUser || null,
+        user: buildCompleteUserProfile(updatedUser) || null,
       },
     }, 'Image uploaded successfully');
   } catch (err) {
@@ -438,7 +426,7 @@ app.delete(['/upload', '/upload/:userId'], async (req, res) => {
     return sendSuccess(res, {
       data: {
         profileImageUrl: null,
-        user: updatedUser || null,
+        user: buildCompleteUserProfile(updatedUser) || null,
       },
     }, 'Profile image removed successfully');
   } catch (err) {
@@ -1478,8 +1466,9 @@ async function handleGetUserProfile(req, res) {
       user: {
         ...buildCompleteUserProfile(user),
         friendCount,
-        friendIds: friendIds.length ? friendIds : null,
-        friends: friends.length ? friends : null,
+        friendIds: friendIds.length ? friendIds : [],
+        friends: friends.length ? friends : [],
+        friendRequests: [...incomingRequests, ...outgoingRequests],
         pendingFriendRequests: pending,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
@@ -1758,9 +1747,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
         ...acceptedPayload,
-        newFriend:
-          buildCompleteUserProfile(recipientUser) || sanitizeUserForClient(recipientUser),
-        message: `${recipientUser?.userName || recipientUser?.name || 'Someone'} accepted your friend request`,
+        newFriend: buildCompleteUserProfile(recipientUser),
       });
     }
 
@@ -1768,9 +1755,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     const recipientSocketId = userSockets.get(userId);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_added', {
-        newFriend:
-          buildCompleteUserProfile(senderUser) || sanitizeUserForClient(senderUser),
-        message: 'Friend request accepted',
+        newFriend: buildCompleteUserProfile(senderUser),
       });
     }
 
@@ -2350,7 +2335,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       Logger.info('user/update', '✅ Profile marked as complete', { userId });
     }
 
-    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'profileImagePath', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
+    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'profileImagePath', 'avatarLetter', 'useColorProfile', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'likedUserIds', 'friends', 'isOnline', 'isFriend', 'hasProfileChanged', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
     const safeUpdateData = {};
     for (const key of safeFields) {
       if (Object.prototype.hasOwnProperty.call(updateData, key)) {
@@ -2397,10 +2382,18 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
 
     // ✅ BROADCAST: Notify connected clients of the profile change with ALL fields
     try {
-      io.emit('profile_update', buildCompleteUserProfile(user));
-      Logger.info('user/update', '✅ Broadcast profile_update to connected clients with all fields', { userId });
+      const payload = buildCompleteUserProfile(user);
+      io.emit('profile_update', payload);
+      io.emit('profile_updated', payload);
+      io.emit('friend_profile_updated', {
+        userId: payload.userId,
+        id: payload.userId,
+        profile: payload,
+        timestamp: Date.now(),
+      });
+      Logger.info('user/update', '✅ Broadcast profile_update, profile_updated, and friend_profile_updated to connected clients', { userId });
     } catch (broadcastErr) {
-      Logger.warn('user/update', 'Failed to broadcast profile_update', { userId, error: broadcastErr && broadcastErr.message });
+      Logger.warn('user/update', 'Failed to broadcast profile_update or friend_profile_updated', { userId, error: broadcastErr && broadcastErr.message });
     }
 
     const profileCreated = (() => {
@@ -3166,23 +3159,8 @@ async function attemptMatch(roomType = 'video') {
       user2: user2DataValid.userId,
     });
 
-    // Normalize outgoing user object to guarantee profile image keys the frontend expects
-    const normalizeOutgoingUser = (ud) => {
-      const profileImage = ud && (ud.profileImagePath || ud.profile_image_path || ud.profileImage || ud.profile_pic || ud.photo) ? (ud.profileImagePath || ud.profile_image_path || ud.profileImage || ud.profile_pic || ud.photo) : null;
-    const profileImageUrl = ud && (ud.profileImageUrl || ud.photoUrl || ud.photo_url || ud.avatarUrl || ud.avatar_url) ? (ud.profileImageUrl || ud.photoUrl || ud.photo_url || ud.avatarUrl || ud.avatar_url) : null;
-      return {
-        userId: ud.userId || null,
-        userName: ud.userName || 'Unknown',
-        avatarColor: ud.avatarColor || '#128C7E',
-        avatarLetter: (ud.avatarLetter || (ud.userName ? ud.userName.charAt(0).toUpperCase() : 'U')).substring(0,1),
-        // Provide multiple variants so different clients can read whichever key they expect
-        profileImagePath: profileImage,
-        profile_image_path: profileImage,
-        profileImage: profileImage,
-        profileImageUrl: profileImageUrl,
-      };
-    };
-
+    // Normalize outgoing partner data for the matching event using canonical frontend-compatible profile.
+    const normalizeOutgoingUser = (ud) => buildCompleteUserProfile(ud);
     const user1Out = normalizeOutgoingUser(user1DataValid);
     const user2Out = normalizeOutgoingUser(user2DataValid);
 
@@ -3540,6 +3518,37 @@ io.on('connection', (socket) => {
       if (typeof callback === 'function') {
         callback({ success: false, error: 'Reconnect failed' });
       }
+    }
+  });
+
+  socket.on('set_user_online_status', (data, callback) => {
+    try {
+      const userId = normalizeId(data?.userId || socket.data?.userId || socket.handshake?.query?.userId);
+      if (!userId) {
+        const error = { success: false, error: 'Missing userId' };
+        if (typeof callback === 'function') callback(error);
+        return;
+      }
+
+      const isOnline = data?.isOnline === true;
+      const statusPayload = {
+        userId,
+        userName: data?.userName || socket.data?.userName || null,
+        isOnline,
+        timestamp: new Date().toISOString(),
+      };
+
+      Logger.info('set_user_online_status', 'Received online status update', {
+        socketId: socket.id,
+        userId,
+        isOnline,
+      });
+
+      io.emit('user_online_status', statusPayload);
+      if (typeof callback === 'function') callback({ success: true, status: statusPayload });
+    } catch (err) {
+      Logger.error('set_user_online_status', 'Error handling online status update', err.message);
+      if (typeof callback === 'function') callback({ success: false, error: 'Failed to update online status' });
     }
   });
 

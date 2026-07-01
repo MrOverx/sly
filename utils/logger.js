@@ -68,10 +68,6 @@ class Logger {
     this._persistenceEnabled = enabled;
   }
 
-  static getLogFilePath() {
-    return this._logFilePath;
-  }
-
   static _getDocClient() {
     if (this._docClient) {
       return this._docClient;

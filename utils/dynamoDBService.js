@@ -35,8 +35,26 @@ function shouldUseDevStoreFallback() {
   // but otherwise the server should not silently fall back to a JSON store.
   if (DYNAMODB_ENDPOINT) return false;
 
-  // Do not use local JSON fallback automatically in development unless requested.
-  // This ensures the app writes only to AWS DynamoDB/S3 when the deployment is configured.
+  // If common AWS credential environment variables are missing, enable dev-store
+  // fallback so local development works when no credentials are configured.
+  const credEnvVars = [
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'AWS_PROFILE',
+    'AWS_DEFAULT_PROFILE',
+    'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+    'AWS_WEB_IDENTITY_TOKEN_FILE',
+    'AWS_ROLE_ARN',
+  ];
+
+  const hasCredEnv = credEnvVars.some((k) => !!process.env[k]);
+  if (!hasCredEnv) {
+    console.warn('[dynamoDBService] No AWS credential env vars detected; enabling local dev fallback store');
+    return true;
+  }
+
+  // Default: do not enable dev store fallback when AWS credentials are present
   return false;
 }
 
@@ -301,6 +319,21 @@ function buildUserItem(user) {
     emailVerifiedAt,
     isActive: user.isActive !== false,
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
+    likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    friendIds: Array.isArray(user.friendIds)
+      ? user.friendIds
+      : (Array.isArray(user.friends)
+          ? user.friends
+              .map((friend) => {
+                if (friend && typeof friend === 'object') {
+                  return friend.friendId || friend.userId || friend.id || null;
+                }
+                return friend;
+              })
+              .filter(Boolean)
+          : []),
+    friends: Array.isArray(user.friends) ? user.friends : [],
+    friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -407,6 +440,9 @@ function serializeFriendForClient(user) {
   const normalizedUserId = normalizeIdValue(user.userId || user.friendId || user.id || null);
   const displayName = user.userName || user.name || user.displayName || normalizedUserId || 'User';
 
+  const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
+  const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
+
   return {
     userId: normalizedUserId,
     id: normalizedUserId,
@@ -417,8 +453,16 @@ function serializeFriendForClient(user) {
     email: user.email || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
-    profileImageUrl: user.profileImageUrl || null,
-    profileImagePath: user.profileImagePath || null,
+    profileImageUrl,
+    profile_image_url: profileImageUrl,
+    profileImagePath,
+    profile_image_path: profileImagePath,
+    avatarUrl: profileImageUrl,
+    avatar_url: profileImageUrl,
+    displayImagePath: profileImagePath,
+    display_image_path: profileImagePath,
+    displayImageUrl: profileImageUrl,
+    display_image_url: profileImageUrl,
     pictureName: user.pictureName || null,
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
@@ -1640,8 +1684,7 @@ module.exports = {
   deleteBlocksForUser,
   deleteReportsForUserAndReporter,
   getUserStats,
-  normalizeProfileImageReference,
-  buildProfileImageFields,
+  // Internal helpers (not exported): normalizeProfileImageReference, buildProfileImageFields
   getFriendshipStatus,
   getFriendRequestBetweenUsers,
   acceptFriendRequestTransaction,

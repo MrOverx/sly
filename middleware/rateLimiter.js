@@ -126,46 +126,9 @@ function startCleanupInterval() {
   }, 15 * 60 * 1000); // Run every 15 minutes
 }
 
-/**
- * Get current rate limit status for a key
- * @param {string} name - Rate limiter name
- * @param {string} ip - IP address
- * @param {string} [userId] - Optional user ID
- * @param {number} [maxRequests] - Max allowed requests (default 100)
- */
-function getRateLimitStatus(name, ip, userId = 'anonymous', maxRequests = 100) {
-  const key = `${name}:${ip}:${userId}`;
-  const record = requestLimits.get(key);
-
-  return {
-    limited: record ? record.count >= maxRequests : false,
-    currentCount: record?.count || 0,
-    resetTime: record?.resetTime || null,
-  };
-}
-
-/**
- * Reset rate limit for a specific key
- */
-function resetRateLimit(name, ip, userId = 'anonymous') {
-  const key = `${name}:${ip}:${userId}`;
-  requestLimits.delete(key);
-  Logger.info('rateLimit', `Rate limit reset for ${name}`, { userId });
-}
-
-/**
- * Reset all rate limits
- */
-function resetAllRateLimits() {
-  requestLimits.clear();
-  Logger.info('rateLimit', 'All rate limits reset');
-}
-
 module.exports = {
   globalRateLimit,
   createRateLimiter,
   startCleanupInterval,
-  getRateLimitStatus,
-  resetRateLimit,
-  resetAllRateLimits,
+  // Admin: get/reset functions removed — not referenced in codebase
 };

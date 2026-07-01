@@ -200,13 +200,6 @@ function startPeriodicCleanup(intervalMs = 30 * 1000) {
   }, intervalMs);
 }
 
-function stopPeriodicCleanup() {
-  if (_cleanupInterval) {
-    clearInterval(_cleanupInterval);
-    _cleanupInterval = null;
-  }
-}
-
 if (process.env.NODE_ENV !== 'test') {
   startPeriodicCleanup();
 }

@@ -149,10 +149,4 @@ module.exports = {
   errorHandler,
   notFoundHandler,
   asyncHandler,
-  // Error classes
-  AppError,
-  ValidationError,
-  NotFoundError,
-  UnauthorizedError,
-  ForbiddenError,
 };
