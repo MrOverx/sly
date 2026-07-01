@@ -31,30 +31,16 @@ function shouldUseDevStoreFallback() {
     return true;
   }
 
+  if (process.env.USE_DEV_STORE === 'false') {
+    console.info('[dynamoDBService] Local dev fallback store disabled explicitly via USE_DEV_STORE=false');
+    return false;
+  }
+
   // Explicit local DynamoDB endpoint is still allowed for local development,
   // but otherwise the server should not silently fall back to a JSON store.
   if (DYNAMODB_ENDPOINT) return false;
 
-  // If common AWS credential environment variables are missing, enable dev-store
-  // fallback so local development works when no credentials are configured.
-  const credEnvVars = [
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-    'AWS_SESSION_TOKEN',
-    'AWS_PROFILE',
-    'AWS_DEFAULT_PROFILE',
-    'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
-    'AWS_WEB_IDENTITY_TOKEN_FILE',
-    'AWS_ROLE_ARN',
-  ];
-
-  const hasCredEnv = credEnvVars.some((k) => !!process.env[k]);
-  if (!hasCredEnv) {
-    console.warn('[dynamoDBService] No AWS credential env vars detected; enabling local dev fallback store');
-    return true;
-  }
-
-  // Default: do not enable dev store fallback when AWS credentials are present
+  // Default: do not enable dev store fallback unless explicitly requested.
   return false;
 }
 
