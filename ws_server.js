@@ -81,6 +81,16 @@ const {
 
 const isDatabaseConnected = isDbConnected;
 
+function normalizeIsoTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  return null;
+}
+
 // ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
 // Ensures backend payloads match the expected frontend user schema and aliases.
 function buildCompleteUserProfile(user) {
@@ -89,58 +99,30 @@ function buildCompleteUserProfile(user) {
   const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
   const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
   return {
-    // Basic identifiers
     userId: user.userId || user.id || user._id || null,
     userName: displayName,
-    name: displayName,
-    displayName: displayName,
     email: user.email || null,
-
-    // Avatar & display
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
-    profileImageUrl,
-    profile_image_url: profileImageUrl,
     profileImagePath,
-    profile_image_path: profileImagePath,
-    avatarUrl: profileImageUrl,
-    avatar_url: profileImageUrl,
-    displayImagePath: profileImagePath,
-    display_image_path: profileImagePath,
-    displayImageUrl: profileImageUrl,
-    display_image_url: profileImageUrl,
-    pictureName: user.pictureName || null,
-    useColorProfile: user.useColorProfile !== undefined ? user.useColorProfile : true,
-
-    // Personal information
+    profileImageUrl,
+    useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
-    birthDate: user.birthDate || null,
+    birthDate: normalizeIsoTimestamp(user.birthDate),
     country: user.country || null,
-
-    // Profile content
     status: user.status || null,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
-
-    // Engagement & XP
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
     friends: Array.isArray(user.friends) ? user.friends : [],
     friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
-    pendingFriendRequests: user.pendingFriendRequests || null,
-    lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
-
-    // Account status
     authType: user.authType || 'LOCAL',
-    isGuest: user.isGuest || false,
-    isOnline: user.isOnline || false,
-    isFriend: user.isFriend || false,
-    hasProfileChanged: user.hasProfileChanged !== undefined ? user.hasProfileChanged : false,
-    profileComplete: user.profileComplete !== undefined ? user.profileComplete : false,
-
-    // Metadata
-    timestamp: Date.now(),
+    isGuest: user.isGuest === true,
+    hasProfileChanged: user.hasProfileChanged === true,
+    isOnline: user.isOnline === true,
+    isFriend: user.isFriend === true,
+    lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
   };
 }
 
@@ -1661,17 +1643,17 @@ app.post('/friends/add', async (req, res) => {
 
     // Emit socket event to recipient with normalized request payload
     const recipientSocketId = userSockets.get(friendId);
-    const requestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
-    requestPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
+    const recipientRequestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
+    recipientRequestPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_request_received', {
-        ...requestPayload,
+        ...recipientRequestPayload,
         message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
       });
     }
 
-    // For sender response, mark as outgoing (isIncoming = false)
-    const senderResponsePayload = {...requestPayload, isIncoming: false};
+    // Build outgoing payload for sender response, so fromUser fields reflect the target recipient
+    const senderResponsePayload = buildFriendRequestPayload(friendRequest, userId, senderUser, recipientUser);
 
     return res.status(201).json({
       success: true,

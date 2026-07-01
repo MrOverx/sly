@@ -302,6 +302,10 @@ function buildUserItem(user) {
     profileComplete: Boolean(user.profileComplete),
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (user.userName ? user.userName.charAt(0).toUpperCase() : 'U'),
+    useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
+    hasProfileChanged: Boolean(user.hasProfileChanged),
+    isFriend: Boolean(user.isFriend),
+    isOnline: Boolean(user.isOnline),
     ...buildProfileImageFields(user),
     pictureName: user.pictureName || null,
     passwordHash: user.passwordHash || null,
@@ -324,6 +328,7 @@ function buildUserItem(user) {
           : []),
     friends: Array.isArray(user.friends) ? user.friends : [],
     friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
+    pendingFriendRequests: Array.isArray(user.pendingFriendRequests) ? user.pendingFriendRequests : null,
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -535,7 +540,7 @@ async function getUserById(userId) {
   await loadTableSchema();
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const found = items.find((it) => String(it.userId) === String(userId));
+    const found = items.find((it) => it.itemType === 'USER' && String(it.userId) === String(userId));
     return normalizeDdbItem(found || null);
   }
 
@@ -550,7 +555,7 @@ async function getUserByEmail(email) {
 
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const found = items.find((it) => it.emailLower && String(it.emailLower) === emailLower);
+    const found = items.find((it) => it.itemType === 'USER' && it.emailLower && String(it.emailLower) === emailLower);
     if (found) return normalizeDdbItem(found);
     return null;
   }
@@ -684,10 +689,10 @@ async function upsertUser(userData) {
   await loadTableSchema();
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const existing = items.find((u) => String(u.userId) === String(userData.userId));
+    const existing = items.find((u) => u.itemType === 'USER' && String(u.userId) === String(userData.userId));
 
     if (userData.email) {
-      const emailCollisionUser = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
+      const emailCollisionUser = items.find((u) => u.itemType === 'USER' && u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
       if (emailCollisionUser && emailCollisionUser.userId !== userData.userId) {
         throw new Error('EMAIL_CONFLICT');
       }
@@ -717,7 +722,7 @@ async function upsertUser(userData) {
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
 
     // upsert into dev store
-    const filtered = items.filter((u) => String(u.userId) !== String(item.userId));
+    const filtered = items.filter((u) => !(u.itemType === 'USER' && String(u.userId) === String(item.userId)));
     filtered.push(item);
     saveDevStore(filtered);
     return normalizeDdbItem(item);
@@ -782,10 +787,10 @@ async function createUser(userData) {
   await loadTableSchema();
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const existingById = items.find((u) => String(u.userId) === String(userData.userId));
+    const existingById = items.find((u) => u.itemType === 'USER' && String(u.userId) === String(userData.userId));
     if (existingById) throw new Error('USER_EXISTS');
     if (userData.email) {
-      const existingByEmail = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
+      const existingByEmail = items.find((u) => u.itemType === 'USER' && u.email && String(u.email).trim().toLowerCase() === normalizeEmail(userData.email));
       if (existingByEmail) throw new Error('USER_EXISTS');
     }
     const item = buildUserItem(userData);
@@ -840,7 +845,7 @@ async function updateUserById(userId, updates) {
 
     const item = buildUserItem(merged);
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
-    const filtered = items.filter((u) => String(u.userId) !== String(userId));
+    const filtered = items.filter((u) => !(u.itemType === 'USER' && String(u.userId) === String(userId)));
     filtered.push(item);
     saveDevStore(filtered);
     return normalizeDdbItem(item);
@@ -1288,7 +1293,9 @@ async function getUsersByIds(userIds) {
 
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const found = items.filter((it) => userIds.includes(String(it.userId))).map(normalizeDdbItem);
+    const found = items
+      .filter((it) => it.itemType === 'USER' && userIds.includes(String(it.userId)))
+      .map(normalizeDdbItem);
     return found;
   }
 
