@@ -327,8 +327,8 @@ function buildUserItem(user) {
               .filter(Boolean)
           : []),
     friends: Array.isArray(user.friends) ? user.friends : [],
-    friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
-    pendingFriendRequests: Array.isArray(user.pendingFriendRequests) ? user.pendingFriendRequests : null,
+    friendRequests: normalizeFriendRequestsValue(user.friendRequests),
+    pendingFriendRequests: normalizeFriendRequestsValue(user.pendingFriendRequests),
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -376,6 +376,144 @@ function normalizeFriendRequestItem(item) {
   delete normalized.recipient;
 
   return normalized;
+}
+
+function normalizeFriendRequestEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.filter(Boolean).map((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return { requestId: String(entry), status: 'pending' };
+    }
+    return entry;
+  });
+}
+
+function isObjectFriendRequests(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && (Array.isArray(value.sent) || Array.isArray(value.received));
+}
+
+function normalizeFriendRequestsValue(value) {
+  if (Array.isArray(value)) {
+    return normalizeFriendRequestEntries(value);
+  }
+
+  if (isObjectFriendRequests(value)) {
+    return {
+      sent: normalizeFriendRequestEntries(value.sent),
+      received: normalizeFriendRequestEntries(value.received),
+    };
+  }
+
+  return [];
+}
+
+function buildFriendRequestReference(requestItem, status = 'pending') {
+  const normalizedRequest = normalizeFriendRequestItem(requestItem || {});
+  const senderId = normalizeIdValue(normalizedRequest.userId || normalizedRequest.senderId || normalizedRequest.fromUserId || null);
+  const recipientId = normalizeIdValue(normalizedRequest.recipientId || normalizedRequest.friendId || normalizedRequest.toUserId || normalizedRequest.recipientUserId || null);
+  const requestId = normalizeIdValue(normalizedRequest.requestId || `${senderId}|${recipientId}`);
+
+  return {
+    requestId,
+    userId: senderId,
+    senderId,
+    recipientId,
+    friendId: recipientId,
+    status: String(status || normalizedRequest.status || 'pending').toLowerCase(),
+    createdAt: normalizedRequest.createdAt || new Date().toISOString(),
+    updatedAt: normalizedRequest.updatedAt || new Date().toISOString(),
+  };
+}
+
+function mergeFriendRequestReference(existingRequests = [], requestItem, status = 'pending', currentUserId = null) {
+  const reference = buildFriendRequestReference(requestItem, status);
+  const requestId = reference.requestId;
+
+  if (isObjectFriendRequests(existingRequests)) {
+    const bucket = normalizeIdValue(currentUserId) === normalizeIdValue(reference.userId || reference.senderId)
+      ? 'sent'
+      : normalizeIdValue(currentUserId) === normalizeIdValue(reference.recipientId || reference.friendId)
+        ? 'received'
+        : 'sent';
+    const nextEntries = normalizeFriendRequestEntries(existingRequests[bucket]);
+    const existingIndex = nextEntries.findIndex((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+      return candidateId === requestId;
+    });
+
+    if (existingIndex >= 0) {
+      nextEntries[existingIndex] = {
+        ...nextEntries[existingIndex],
+        ...reference,
+        requestId,
+        userId: reference.userId,
+        senderId: reference.senderId,
+        recipientId: reference.recipientId,
+        friendId: reference.friendId,
+      };
+    } else {
+      nextEntries.push(reference);
+    }
+
+    return {
+      ...existingRequests,
+      [bucket]: nextEntries,
+    };
+  }
+
+  const nextRequests = Array.isArray(existingRequests) ? existingRequests.filter(Boolean) : [];
+  const existingIndex = nextRequests.findIndex((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+    return candidateId === requestId;
+  });
+
+  if (existingIndex >= 0) {
+    nextRequests[existingIndex] = {
+      ...nextRequests[existingIndex],
+      ...reference,
+      requestId,
+      userId: reference.userId,
+      senderId: reference.senderId,
+      recipientId: reference.recipientId,
+      friendId: reference.friendId,
+    };
+    return nextRequests;
+  }
+
+  nextRequests.push(reference);
+  return nextRequests;
+}
+
+async function persistFriendRequestOnUser(userId, requestItem, status = 'pending') {
+  if (!userId || !requestItem) return null;
+
+  const currentUser = await getUserById(userId);
+  const nextRequests = mergeFriendRequestReference(currentUser?.friendRequests, requestItem, status, userId);
+
+  if (!currentUser) {
+    return upsertUser({
+      userId,
+      userName: userId,
+      email: null,
+      authType: 'LOCAL',
+      isGuest: true,
+      profileComplete: false,
+      friendRequests: nextRequests,
+      pendingFriendRequests: nextRequests,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const updatedUser = await updateUserById(userId, {
+    friendRequests: nextRequests,
+    pendingFriendRequests: nextRequests,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return updatedUser;
 }
 
 function serializeFriendRequestForClient(request, currentUserId, senderUser = null, recipientUser = null) {
@@ -1013,17 +1151,29 @@ async function createFriendRequest(userId, friendId) {
         items[existingIndex] = normalizedExisting;
         saveDevStore(items);
       }
+      await Promise.all([
+        persistFriendRequestOnUser(userId, normalizedExisting, 'pending'),
+        persistFriendRequestOnUser(friendId, normalizedExisting, 'pending'),
+      ]);
       return normalizedExisting;
     }
 
     const item = buildFriendItem(userId, friendId, 'pending');
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
+    await Promise.all([
+      persistFriendRequestOnUser(userId, item, 'pending'),
+      persistFriendRequestOnUser(friendId, item, 'pending'),
+    ]);
     return item;
   }
 
   const item = buildFriendItem(userId, friendId, 'pending');
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+  await Promise.all([
+    persistFriendRequestOnUser(userId, item, 'pending'),
+    persistFriendRequestOnUser(friendId, item, 'pending'),
+  ]);
   return item;
 }
 
@@ -1039,11 +1189,19 @@ async function updateFriendRequestStatus(userId, friendId, status) {
     const updated = normalizeFriendRequestItem({ ...items[index], status, updatedAt: new Date().toISOString() });
     items[index] = updated;
     upsertDevStoreItem(updated);
+    await Promise.all([
+      persistFriendRequestOnUser(userId, updated, status),
+      persistFriendRequestOnUser(friendId, updated, status),
+    ]);
     return updated;
   }
 
   const updated = normalizeFriendRequestItem({ ...current, status, updatedAt: new Date().toISOString() });
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: updated }));
+  await Promise.all([
+    persistFriendRequestOnUser(userId, updated, status),
+    persistFriendRequestOnUser(friendId, updated, status),
+  ]);
   return updated;
 }
 
@@ -1626,15 +1784,38 @@ async function acceptFriendRequestTransaction(requestItem) {
       upsertFriendIdForUser(items, senderId, recipientId);
       upsertFriendIdForUser(items, recipientId, senderId);
 
+      // Mark the pending friend request as accepted in both user profile arrays.
+      const acceptedRequest = buildFriendRequestReference({ ...requestItem, status: 'accepted', updatedAt: new Date().toISOString() }, 'accepted');
+      const senderUser = items.find((e) => e.itemType === 'USER' && String(e.userId) === String(senderId));
+      if (senderUser) {
+        senderUser.friendRequests = mergeFriendRequestReference(Array.isArray(senderUser.friendRequests) ? senderUser.friendRequests : senderUser.friendRequests, acceptedRequest, 'accepted', senderUser.userId);
+        senderUser.pendingFriendRequests = senderUser.friendRequests;
+        senderUser.updatedAt = new Date().toISOString();
+      }
+      const recipientUser = items.find((e) => e.itemType === 'USER' && String(e.userId) === String(recipientId));
+      if (recipientUser) {
+        recipientUser.friendRequests = mergeFriendRequestReference(Array.isArray(recipientUser.friendRequests) ? recipientUser.friendRequests : recipientUser.friendRequests, acceptedRequest, 'accepted', recipientUser.userId);
+        recipientUser.pendingFriendRequests = recipientUser.friendRequests;
+        recipientUser.updatedAt = new Date().toISOString();
+      }
+
       // Persist the modified store once
       saveDevStore(items);
       const updated = Object.assign({}, requestItem, { status: 'accepted', updatedAt: new Date().toISOString() });
+      await Promise.all([
+        persistFriendRequestOnUser(senderId, updated, 'accepted'),
+        persistFriendRequestOnUser(recipientId, updated, 'accepted'),
+      ]);
       return updated;
     }
 
     await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
     // Return an updated request-like object to the caller
     const updated = Object.assign({}, requestItem, { status: 'accepted', updatedAt: new Date().toISOString() });
+    await Promise.all([
+      persistFriendRequestOnUser(senderId, updated, 'accepted'),
+      persistFriendRequestOnUser(recipientId, updated, 'accepted'),
+    ]);
     return updated;
   } catch (err) {
     // If conditional check fails, attempt to read the current state and return it

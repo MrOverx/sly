@@ -91,6 +91,30 @@ function normalizeIsoTimestamp(value) {
   return null;
 }
 
+function normalizeFriendRequestsPayload(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.sent) || Array.isArray(value.received)) {
+      return {
+        sent: Array.isArray(value.sent) ? value.sent : [],
+        received: Array.isArray(value.received) ? value.received : [],
+      };
+    }
+    if (Array.isArray(value.incoming) || Array.isArray(value.outgoing)) {
+      return {
+        incoming: Array.isArray(value.incoming) ? value.incoming : [],
+        outgoing: Array.isArray(value.outgoing) ? value.outgoing : [],
+      };
+    }
+    return value;
+  }
+
+  return [];
+}
+
 // ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
 // Ensures backend payloads match the expected frontend user schema and aliases.
 function buildCompleteUserProfile(user) {
@@ -115,8 +139,12 @@ function buildCompleteUserProfile(user) {
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
+    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
     friends: Array.isArray(user.friends) ? user.friends : [],
-    friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
+    friendRequests: normalizeFriendRequestsPayload(user.friendRequests),
+    pendingFriendRequests: user.pendingFriendRequests === undefined || user.pendingFriendRequests === null
+      ? null
+      : normalizeFriendRequestsPayload(user.pendingFriendRequests),
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,

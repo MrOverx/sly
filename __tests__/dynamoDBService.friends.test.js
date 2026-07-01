@@ -110,11 +110,13 @@ describe('friend persistence in the local dev store', () => {
     expect(alice.profileImageUrl).toBe('https://example.com/alice.png');
     expect(alice.friendIds).toContain('u2');
     expect(alice.hasProfileChanged).toBe(true);
+    expect(alice.friendRequests).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'accepted' })]));
 
     const bob = await service.getUserById('u2');
     expect(bob).not.toBeNull();
     expect(bob.itemType).toBe('USER');
     expect(bob.userName).toBe('Bob');
     expect(bob.friendIds).toContain('u1');
+    expect(bob.friendRequests).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'accepted' })]));
   });
 });
