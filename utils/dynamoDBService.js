@@ -890,12 +890,12 @@ async function searchUsers(query, limit = 25) {
 
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const found = items.filter((it) => {
+    const found = items.filter((it) => it.itemType === 'USER' && (() => {
       const name = String(it.userName || '').toLowerCase();
       const email = String(it.email || '').toLowerCase();
       const id = String(it.userId || '').toLowerCase();
       return name.includes(queryLower) || email.includes(queryLower) || id.includes(queryLower);
-    }).slice(0, limit).map(normalizeDdbItem);
+    })()).slice(0, limit).map(normalizeDdbItem);
     return found;
   }
 

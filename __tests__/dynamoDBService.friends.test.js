@@ -60,4 +60,61 @@ describe('friend persistence in the local dev store', () => {
     expect(friendsForU1).toEqual(['u2']);
     expect(friendsForU2).toEqual(['u1']);
   });
+
+  it('preserves full USER records after sending and accepting a friend request', async () => {
+    const service = require('../utils/dynamoDBService');
+
+    await service.createUser({
+      userId: 'u1',
+      userName: 'Alice',
+      email: 'alice@example.com',
+      authType: 'MAIL',
+      isGuest: false,
+      profileComplete: true,
+      avatarColor: '#4A90E2',
+      avatarLetter: 'A',
+      profileImageUrl: 'https://example.com/alice.png',
+      country: 'USA',
+      gender: 'female',
+      bio: 'Hello world',
+      interests: ['travel', 'music'],
+      xp: { base: 120, daily: 20 },
+      likedUserIds: ['u3'],
+      useColorProfile: true,
+      hasProfileChanged: true,
+      isOnline: true,
+      lastDailyXpAwardedAt: '2026-06-30T08:00:00.000Z',
+    });
+
+    await service.createUser({
+      userId: 'u2',
+      userName: 'Bob',
+      email: 'bob@example.com',
+      authType: 'MAIL',
+      isGuest: false,
+      profileComplete: true,
+    });
+
+    const request = await service.createFriendRequest('u1', 'u2');
+    expect(request.status).toBe('pending');
+
+    const accepted = await service.acceptFriendRequestTransaction(request);
+    expect(accepted.status).toBe('accepted');
+
+    const alice = await service.getUserById('u1');
+    expect(alice).not.toBeNull();
+    expect(alice.itemType).toBe('USER');
+    expect(alice.userName).toBe('Alice');
+    expect(alice.email).toBe('alice@example.com');
+    expect(alice.avatarColor).toBe('#4A90E2');
+    expect(alice.profileImageUrl).toBe('https://example.com/alice.png');
+    expect(alice.friendIds).toContain('u2');
+    expect(alice.hasProfileChanged).toBe(true);
+
+    const bob = await service.getUserById('u2');
+    expect(bob).not.toBeNull();
+    expect(bob.itemType).toBe('USER');
+    expect(bob.userName).toBe('Bob');
+    expect(bob.friendIds).toContain('u1');
+  });
 });
