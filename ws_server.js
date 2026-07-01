@@ -40,6 +40,7 @@ const compression = require('compression');
 const helmet = require('helmet');
 const {
   isDbConnected,
+  isDevStoreEnabled,
   getUserById,
   getUserByEmail,
   findUserByLookup,
@@ -981,6 +982,9 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
 
 // ========== NEW: LOGIN ENDPOINT ==========
 app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res) => {
+  if (isDevStoreEnabled()) {
+    return sendError(res, 503, 'Local development store is disabled for login; please connect to DynamoDB', 'DB_NOT_CONNECTED');
+  }
   if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }

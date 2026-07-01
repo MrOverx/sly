@@ -63,6 +63,10 @@ function shouldUseDevStoreFallback() {
 const USE_DEV_STORE = shouldUseDevStoreFallback();
 const DEV_STORE_PATH = path.resolve(__dirname, '..', 'dev_dynamo_users.json');
 
+function isDevStoreEnabled() {
+  return USE_DEV_STORE;
+}
+
 function loadDevStore() {
   try {
     if (!fs.existsSync(DEV_STORE_PATH)) {
@@ -600,11 +604,12 @@ async function getUserByEmail(email) {
   }
 
   // Legacy fallback: some records may not have emailLower populated.
+  // This scan is intentionally broader to support case-insensitive email matching
+  // from older records where emailLower was not persisted.
   const legacyScan = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'attribute_not_exists(emailLower) OR email = :email',
-    ExpressionAttributeValues: { ':email': String(email).trim() },
-    Limit: 50,
+    FilterExpression: 'attribute_not_exists(emailLower)',
+    Limit: 100,
   }));
 
   if (legacyScan.Items && legacyScan.Items.length) {
@@ -1650,6 +1655,7 @@ async function acceptFriendRequestTransaction(requestItem) {
 
 module.exports = {
   isDbConnected,
+  isDevStoreEnabled,
   getUserById,
   getUserByEmail,
   findUserByLookup,
