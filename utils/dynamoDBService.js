@@ -748,7 +748,7 @@ async function getUserByEmail(email) {
 
   const scan = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'emailLower = :emailLower',
+    FilterExpression: 'emailLower = :emailLower OR email = :emailLower',
     ExpressionAttributeValues: { ':emailLower': emailLower },
     Limit: 1,
   }));
@@ -758,22 +758,27 @@ async function getUserByEmail(email) {
   }
 
   // Legacy fallback: some records may not have emailLower populated.
-  // This scan is intentionally broader to support case-insensitive email matching
-  // from older records where emailLower was not persisted.
-  const legacyScan = await ddb.send(new ScanCommand({
-    TableName: TABLE_NAME,
-    FilterExpression: 'attribute_not_exists(emailLower)',
-    Limit: 100,
-  }));
+  // This scans items without emailLower to support older user records.
+  let lastEvaluatedKey = null;
+  do {
+    const legacyScan = await ddb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: 'attribute_not_exists(emailLower)',
+      ExclusiveStartKey: lastEvaluatedKey || undefined,
+      ProjectionExpression: 'userId, email, emailLower, passwordHash',
+    }));
 
-  if (legacyScan.Items && legacyScan.Items.length) {
-    const legacyUser = legacyScan.Items.find((item) => {
-      return item.email && String(item.email).trim().toLowerCase() === emailLower;
-    });
-    if (legacyUser) {
-      return normalizeDdbItem(legacyUser);
+    if (legacyScan.Items && legacyScan.Items.length) {
+      const legacyUser = legacyScan.Items.find((item) =>
+        item.email && String(item.email).trim().toLowerCase() === emailLower,
+      );
+      if (legacyUser) {
+        return normalizeDdbItem(legacyUser);
+      }
     }
-  }
+
+    lastEvaluatedKey = legacyScan.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
 
   return null;
 }
