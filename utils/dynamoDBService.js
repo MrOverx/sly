@@ -106,6 +106,7 @@ const ddb = DynamoDBDocumentClient.from(client, {
 let TABLE_HASH_KEY = 'PK';
 let TABLE_RANGE_KEY = 'SK';
 let TABLE_HAS_SORT_KEY = true;
+let EMAIL_INDEX_AVAILABLE = null;
 let TABLE_SCHEMA_LOADED = false;
 let TABLE_SCHEMA_PROMISE = null;
 
@@ -725,7 +726,32 @@ async function getUserByEmail(email) {
 
   await loadTableSchema();
 
-  try {
+  if (EMAIL_INDEX_AVAILABLE == null) {
+    try {
+      const result = await ddb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: 'EmailIndex',
+        KeyConditionExpression: 'emailLower = :emailLower',
+        ExpressionAttributeValues: {
+          ':emailLower': emailLower,
+        },
+        Limit: 1,
+      }));
+
+      EMAIL_INDEX_AVAILABLE = true;
+      if (result.Items && result.Items.length) {
+        return normalizeDdbItem(result.Items[0]);
+      }
+    } catch (err) {
+      EMAIL_INDEX_AVAILABLE = false;
+      Logger.warn('dynamoDBService', 'EmailIndex query failed; falling back to scan', {
+        email: emailLower,
+        error: err?.message || err,
+      });
+    }
+  }
+
+  if (EMAIL_INDEX_AVAILABLE == true) {
     const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'EmailIndex',
@@ -739,11 +765,6 @@ async function getUserByEmail(email) {
     if (result.Items && result.Items.length) {
       return normalizeDdbItem(result.Items[0]);
     }
-  } catch (err) {
-    Logger.warn('dynamoDBService', 'EmailIndex query failed; falling back to scan', {
-      email: emailLower,
-      error: err?.message || err,
-    });
   }
 
   const scan = await ddb.send(new ScanCommand({

@@ -124,7 +124,8 @@ function buildCompleteUserProfile(user) {
   return {
     userId: user.userId || user.id || user._id || null,
     userName: displayName,
-    email: user.email || null,
+    email: user.email || user.emailLower || null,
+    emailLower: user.emailLower || (user.email ? String(user.email).toLowerCase() : null),
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImagePath,
@@ -1050,6 +1051,7 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
     return sendSuccess(res, {
       user: {
         ...buildCompleteUserProfile(currentUser),
+        emailLower: currentUser.emailLower || (currentUser.email ? String(currentUser.email).toLowerCase() : null),
         lastLogin: currentUser.lastLogin,
         createdAt: currentUser.createdAt,
       },
