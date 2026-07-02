@@ -517,12 +517,7 @@ function validateFieldLength(field, minLength, maxLength) {
 }
 
 module.exports = {
-  // Middleware functions
   validateAuth,
   validateRegistration,
   validateProfileUpdate,
-  // Validation functions
-  validateRoomCreate,
-  validateSocketMetadata,
-  validateFieldLength,
 };

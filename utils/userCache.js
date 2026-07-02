@@ -204,4 +204,7 @@ if (process.env.NODE_ENV !== 'test') {
   startPeriodicCleanup();
 }
 
-module.exports = { UserCache, userCache };
+module.exports = {
+  UserCache,
+  userCache,
+};

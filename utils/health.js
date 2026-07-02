@@ -24,6 +24,7 @@ class HealthMonitor {
       errorCount: 0,
     };
     this.services = new Map();
+    this._monitorInterval = null;
   }
 
   /**
@@ -127,20 +128,6 @@ class HealthMonitor {
   };
 
   /**
-   * Increment request counter
-   */
-  recordRequest() {
-    this.metrics.requestCount++;
-  }
-
-  /**
-   * Increment error counter
-   */
-  recordError() {
-    this.metrics.errorCount++;
-  }
-
-  /**
    * Update socket connection count
    */
   updateSocketConnections(count) {
@@ -148,40 +135,11 @@ class HealthMonitor {
   }
 
   /**
-   * Update DB connection status
-   */
-  setDbConnected(connected) {
-    this.metrics.dbConnected = connected;
-  }
-
-  /**
-   * Get metrics summary
-   */
-  getSummary() {
-    return {
-      status: this.status,
-      uptime: this.metrics.uptime,
-      memory: this.metrics.memoryUsage.toFixed(2),
-      requests: this.metrics.requestCount,
-      errors: this.metrics.errorCount,
-      socketConnections: this.metrics.socketConnections,
-      dbConnected: this.metrics.dbConnected,
-    };
-  }
-
-  /**
-   * Log health summary
-   */
-  logSummary() {
-    const summary = this.getSummary();
-    Logger.info('health', 'Health Summary', summary);
-  }
-
-  /**
    * Start periodic monitoring
    */
   startMonitoring(intervalSeconds = 60) {
-    setInterval(() => {
+    if (this._monitorInterval) return;
+    this._monitorInterval = setInterval(() => {
       this.getStatus().then(() => {
         Logger.debug('health', 'Health check complete', {
           status: this.status,
@@ -191,6 +149,13 @@ class HealthMonitor {
     }, intervalSeconds * 1000);
 
     Logger.info('health', `Health monitoring started (${intervalSeconds}s interval)`);
+  }
+
+  stopMonitoring() {
+    if (!this._monitorInterval) return;
+    clearInterval(this._monitorInterval);
+    this._monitorInterval = null;
+    Logger.info('health', 'Health monitoring stopped');
   }
 }
 

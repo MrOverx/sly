@@ -284,12 +284,13 @@ async function replaceProfileImageInS3(buffer, originalName, contentType, userId
 }
 
 module.exports = {
-  uploadProfileImageToS3,
-  replaceProfileImageInS3,
-  deleteProfileImageFromS3,
-  isS3Configured,
-  isS3Url,
   getS3ObjectKey,
   getPublicUrl,
+  getS3ObjectKeyFromUrl,
+  isS3Url,
+  isS3Configured,
   getAccessibleProfileImageUrl,
+  deleteProfileImageFromS3,
+  uploadProfileImageToS3,
+  replaceProfileImageInS3,
 };

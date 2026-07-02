@@ -33,7 +33,6 @@ if (envPathUsed) {
 
 const express = require('express');
 const http = require('http');
-const https = require('https');
 const socketIO = require('socket.io');
 const bcrypt = require('bcryptjs');
 const compression = require('compression');
