@@ -712,6 +712,14 @@ async function getUserByEmail(email) {
     const items = loadDevStore();
     const found = items.find((it) => it.itemType === 'USER' && it.emailLower && String(it.emailLower) === emailLower);
     if (found) return normalizeDdbItem(found);
+
+    const legacyFound = items.find((it) =>
+      it.itemType === 'USER' &&
+      it.email &&
+      String(it.email).trim().toLowerCase() === emailLower,
+    );
+    if (legacyFound) return normalizeDdbItem(legacyFound);
+
     return null;
   }
 
