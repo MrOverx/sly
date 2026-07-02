@@ -139,12 +139,8 @@ function buildCompleteUserProfile(user) {
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
     friends: Array.isArray(user.friends) ? user.friends : [],
     friendRequests: normalizeFriendRequestsPayload(user.friendRequests),
-    pendingFriendRequests: user.pendingFriendRequests === undefined || user.pendingFriendRequests === null
-      ? null
-      : normalizeFriendRequestsPayload(user.pendingFriendRequests),
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
@@ -1480,10 +1476,8 @@ async function handleGetUserProfile(req, res) {
       user: {
         ...buildCompleteUserProfile(user),
         friendCount,
-        friendIds: friendIds.length ? friendIds : [],
         friends: friends.length ? friends : [],
         friendRequests: [...incomingRequests, ...outgoingRequests],
-        pendingFriendRequests: pending,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
       },
@@ -2104,6 +2098,49 @@ app.get('/friends/requests/outgoing', async (req, res) => {
   } catch (err) {
     Logger.error('friends/requests/outgoing', 'Error getting outgoing requests', err.message);
     return sendError(res, 500, 'Error getting outgoing requests', { details: err.message });
+  }
+});
+
+
+// ========== NEW: GET NOTIFICATIONS ENDPOINT ==========
+app.get('/notifications', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not available');
+  }
+
+  try {
+    const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+    if (!userId) return sendError(res, 400, 'userId is required');
+
+    let user = userCache.get(userId);
+    if (!user) {
+      user = await getUserById(userId);
+      if (user) userCache.set(userId, user);
+    }
+
+    // Notifications are stored as an array on the USER record under `notifications`.
+    const notifications = Array.isArray(user?.notifications) ? user.notifications : [];
+
+    // Also include pending friend requests (incoming) for the notifications view
+    const incoming = await queryFriendRequestsByRecipient(userId);
+    const senderIds = incoming.map((r) => normalizeId(r.userId)).filter(Boolean);
+    const senderUsers = senderIds.length ? await getUsersByIds(senderIds) : [];
+    const senderById = {};
+    (senderUsers || []).forEach((u) => { if (u && u.userId) senderById[String(u.userId)] = u; });
+
+    const requestNotifications = (incoming || []).map((reqItem) => {
+      const sender = senderById[String(reqItem.userId)] || null;
+      const payload = serializeFriendRequestForClient(reqItem, userId, sender, null);
+      payload.type = 'friend_request';
+      return payload;
+    });
+
+    const combined = [...requestNotifications, ...notifications];
+
+    return sendSuccess(res, { data: combined }, 'Notifications retrieved');
+  } catch (err) {
+    Logger.error('notifications/get', 'Error getting notifications', err?.message || err);
+    return sendError(res, 500, 'Error getting notifications', { details: err?.message || String(err) });
   }
 });
 

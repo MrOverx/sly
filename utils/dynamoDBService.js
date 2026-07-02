@@ -606,7 +606,6 @@ function serializeFriendForClient(user) {
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friendIds: Array.isArray(user.friendIds) ? user.friendIds : [],
     authType: user.authType || null,
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
@@ -1730,6 +1729,37 @@ async function acceptFriendRequestTransaction(requestItem) {
     }
   });
 
+  // Add a persistent notification for the original sender so they can
+  // view the "accepted" event from the database (used by notifications UI)
+  try {
+    const now = new Date().toISOString();
+    const notificationForSender = {
+      id: `friend_accept_${recipientId}_${now}`,
+      type: 'friend_request_accepted',
+      requestId: requestItem.requestId || `${senderId}|${recipientId}`,
+      fromUserId: recipientId,
+      toUserId: senderId,
+      activity: `${recipientId} accepted your friend request`,
+      createdAt: now,
+    };
+
+    transactItems.push({
+      Update: {
+        TableName: TABLE_NAME,
+        Key: senderUserKey,
+        UpdateExpression: 'SET notifications = list_append(if_not_exists(notifications, :emptyList), :toAdd), updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':emptyList': [],
+          ':toAdd': [notificationForSender],
+          ':now': now,
+        },
+      }
+    });
+  } catch (e) {
+    // Best-effort: don't block the transaction if notification marshalling fails
+    Logger.warn('acceptFriendRequestTransaction', 'Failed to prepare notification', e && e.message);
+  }
+
   try {
     if (USE_DEV_STORE) {
       // Update local JSON store atomically in memory
@@ -1797,6 +1827,29 @@ async function acceptFriendRequestTransaction(requestItem) {
         recipientUser.friendRequests = mergeFriendRequestReference(Array.isArray(recipientUser.friendRequests) ? recipientUser.friendRequests : recipientUser.friendRequests, acceptedRequest, 'accepted', recipientUser.userId);
         recipientUser.pendingFriendRequests = recipientUser.friendRequests;
         recipientUser.updatedAt = new Date().toISOString();
+      }
+
+      // Add notification to sender's user record in dev store so notifications
+      // can be read from the DB-backed user record.
+      try {
+        const now = new Date().toISOString();
+        const notif = {
+          id: `friend_accept_${recipientId}_${now}`,
+          type: 'friend_request_accepted',
+          requestId: acceptedRequest.requestId,
+          fromUserId: recipientId,
+          toUserId: senderId,
+          activity: `${recipientId} accepted your friend request`,
+          createdAt: now,
+        };
+
+        if (senderUser) {
+          senderUser.notifications = Array.isArray(senderUser.notifications) ? senderUser.notifications : [];
+          senderUser.notifications.push(notif);
+          senderUser.updatedAt = new Date().toISOString();
+        }
+      } catch (e) {
+        Logger.warn('acceptFriendRequestTransaction/devstore', 'Failed to append notification', e && e.message);
       }
 
       // Persist the modified store once
