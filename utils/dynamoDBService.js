@@ -26,7 +26,8 @@ if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
 function shouldUseDevStoreFallback() {
-  if (process.env.NODE_ENV === 'production') {
+  const isTestProcess = typeof process.env.JEST_WORKER_ID !== 'undefined' || process.env.NODE_ENV === 'test';
+  if (process.env.NODE_ENV === 'production' && !isTestProcess) {
     if (process.env.USE_DEV_STORE === 'true') {
       console.error('[dynamoDBService] USE_DEV_STORE=true is not allowed in production. Production must use DynamoDB.');
     }
@@ -265,17 +266,21 @@ function toIso(value) {
 
 function shouldPreserveProtectedField(field, value) {
   if (value === undefined) return true;
-  if (field === 'email' || field === 'emailLower' || field === 'passwordHash' || field === 'userId') {
+  if (field === 'email' || field === 'passwordHash' || field === 'userId') {
     if (value === null) return true;
     if (typeof value === 'string' && value.trim().length === 0) return true;
   }
   return false;
 }
 
+function isDisallowedUserField(field) {
+  return field === 'emailLower' || field === 'userNameLower' || field === 'normalizedEmail' || field === 'normalizedUserName';
+}
+
 function sanitizeUserUpdates(updates = {}) {
   const sanitized = {};
   Object.entries(updates).forEach(([field, value]) => {
-    if (shouldPreserveProtectedField(field, value)) {
+    if (isDisallowedUserField(field) || shouldPreserveProtectedField(field, value)) {
       return;
     }
     sanitized[field] = value;
@@ -289,8 +294,7 @@ function buildUserItem(user) {
   }
 
   const emailValue = user.email ? String(user.email).trim() : null;
-  const normalizedEmail = normalizeEmail(emailValue) || normalizeEmail(user.emailLower);
-  const emailLower = normalizedEmail;
+  const normalizedEmail = normalizeEmail(emailValue);
   const now = new Date().toISOString();
   const createdAt = toIso(user.createdAt) || now;
   const updatedAt = toIso(user.updatedAt) || now;
@@ -313,9 +317,7 @@ function buildUserItem(user) {
     itemType: 'USER',
     userId: String(user.userId),
     userName: user.userName || 'User',
-    userNameLower: user.userName ? String(user.userName).trim().toLowerCase() : null,
     email: emailValue,
-    emailLower,
     authType,
     isGuest: Boolean(user.isGuest),
     gender: user.gender || 'other',
@@ -360,6 +362,11 @@ function buildUserItem(user) {
     updatedAt,
     lastLogin,
   };
+
+  // Persist an internal normalized email attribute for efficient lookups and
+  // indexing. This attribute is intentionally not exposed to clients via
+  // serialization helpers.
+  if (normalizedEmail) item.normalizedEmail = normalizedEmail;
 
   if (user.expiresAt) {
     const expiry = user.expiresAt instanceof Date ? Math.floor(user.expiresAt.getTime() / 1000) : Number(user.expiresAt);
@@ -613,7 +620,6 @@ function serializeFriendForClient(user) {
     name: displayName,
     displayName: displayName,
     email: user.email || null,
-    emailLower: user.emailLower || null,
     passwordHash: user.passwordHash || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
@@ -718,48 +724,42 @@ async function getUserById(userId) {
 }
 
 async function getUserByEmail(email) {
-  const emailLower = normalizeEmail(email);
-  Logger.debug('dynamoDBService', 'getUserByEmail called', { rawEmail: email, normalized: emailLower });
-  if (!emailLower) return null;
+  const normalized = normalizeEmail(email);
+  Logger.debug('dynamoDBService', 'getUserByEmail called', { rawEmail: email, normalized });
+  if (!normalized) return null;
 
   if (USE_DEV_STORE) {
     const items = loadDevStore();
-    const found = items.find((it) => it.itemType === 'USER' && it.emailLower && String(it.emailLower) === emailLower);
+    const found = items.find((it) => it.itemType === 'USER' && it.email && String(it.email).trim().toLowerCase() === normalized);
     if (found) return normalizeDdbItem(found);
-
-    const legacyFound = items.find((it) =>
-      it.itemType === 'USER' &&
-      it.email &&
-      String(it.email).trim().toLowerCase() === emailLower,
-    );
-    if (legacyFound) return normalizeDdbItem(legacyFound);
 
     return null;
   }
 
   await loadTableSchema();
 
+  // Try the normalized attribute via EmailIndex first (if available).
   if (EMAIL_INDEX_AVAILABLE == null) {
     try {
       const result = await ddb.send(new QueryCommand({
         TableName: TABLE_NAME,
         IndexName: 'EmailIndex',
-        KeyConditionExpression: 'emailLower = :emailLower',
+        KeyConditionExpression: 'normalizedEmail = :normalizedEmail',
         ExpressionAttributeValues: {
-          ':emailLower': emailLower,
+          ':normalizedEmail': normalized,
         },
         Limit: 1,
       }));
 
       EMAIL_INDEX_AVAILABLE = true;
-      Logger.debug('dynamoDBService', 'EmailIndex appears available (initial probe)', { email: emailLower });
+      Logger.debug('dynamoDBService', 'EmailIndex appears available (initial probe)', { email: normalized });
       if (result.Items && result.Items.length) {
         return normalizeDdbItem(result.Items[0]);
       }
     } catch (err) {
       EMAIL_INDEX_AVAILABLE = false;
       Logger.warn('dynamoDBService', 'EmailIndex query failed; falling back to scan', {
-        email: emailLower,
+        email: normalized,
         error: err?.message || err,
       });
     }
@@ -769,47 +769,48 @@ async function getUserByEmail(email) {
     const result = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'EmailIndex',
-      KeyConditionExpression: 'emailLower = :emailLower',
+      KeyConditionExpression: 'normalizedEmail = :normalizedEmail',
       ExpressionAttributeValues: {
-        ':emailLower': emailLower,
+        ':normalizedEmail': normalized,
       },
       Limit: 1,
     }));
 
-    Logger.debug('dynamoDBService', 'EmailIndex query executed (cached available)', { email: emailLower, items: result.Items && result.Items.length });
+    Logger.debug('dynamoDBService', 'EmailIndex query executed (cached available)', { email: normalized, items: result.Items && result.Items.length });
 
     if (result.Items && result.Items.length) {
       return normalizeDdbItem(result.Items[0]);
     }
   }
 
+  // Scan fallback: check normalizedEmail, legacy emailLower, or email field.
   const scan = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'emailLower = :emailLower OR email = :emailLower',
-    ExpressionAttributeValues: { ':emailLower': emailLower },
+    FilterExpression: 'normalizedEmail = :e OR emailLower = :e OR email = :e',
+    ExpressionAttributeValues: { ':e': normalized },
     Limit: 1,
   }));
 
-  Logger.debug('dynamoDBService', 'Scan fallback executed', { email: emailLower, items: scan.Items && scan.Items.length });
+  Logger.debug('dynamoDBService', 'Scan fallback executed', { email: normalized, items: scan.Items && scan.Items.length });
 
   if (scan.Items && scan.Items.length) {
     return normalizeDdbItem(scan.Items[0]);
   }
 
-  // Legacy fallback: some records may not have emailLower populated.
-  // This scans items without emailLower to support older user records.
+  // Legacy fallback: some records may not have normalizedEmail populated.
+  // This scans items without normalizedEmail to support older user records.
   let lastEvaluatedKey = null;
   do {
     const legacyScan = await ddb.send(new ScanCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'attribute_not_exists(emailLower)',
+      FilterExpression: 'attribute_not_exists(normalizedEmail)',
       ExclusiveStartKey: lastEvaluatedKey || undefined,
       ProjectionExpression: 'userId, email, emailLower, passwordHash',
     }));
 
     if (legacyScan.Items && legacyScan.Items.length) {
       const legacyUser = legacyScan.Items.find((item) =>
-        item.email && String(item.email).trim().toLowerCase() === emailLower,
+        item.email && String(item.email).trim().toLowerCase() === normalized,
       );
       if (legacyUser) {
         return normalizeDdbItem(legacyUser);
@@ -864,8 +865,8 @@ async function findUserByLookup(lookup) {
     expressionValues[':userId'] = String(lookup.userId).trim();
   }
   if (lookup.email) {
-    scanFilters.push('emailLower = :emailLower');
-    expressionValues[':emailLower'] = normalizeEmail(lookup.email);
+    scanFilters.push('normalizedEmail = :normalizedEmail');
+    expressionValues[':normalizedEmail'] = normalizeEmail(lookup.email);
   }
 
   if (!scanFilters.length) return null;
@@ -911,16 +912,14 @@ async function upsertUser(userData) {
 
     if (!existing) {
       const emailValue = user.email ? String(user.email).trim() : null;
-      const emailLower = normalizeEmail(emailValue);
       user = {
         ...user,
-        authType: normalizeAuthType(user.authType) ?? (Boolean(user.isGuest) ? 'GUEST' : (user.passwordHash ? 'MAIL' : (emailLower ? 'MAIL' : 'LOCAL'))),
+        authType: normalizeAuthType(user.authType) ?? (Boolean(user.isGuest) ? 'GUEST' : (user.passwordHash ? 'MAIL' : (emailValue ? 'MAIL' : 'LOCAL'))),
         isGuest: Boolean(user.isGuest),
         userName: user.userName || 'User',
         profileComplete: Boolean(user.profileComplete),
         isActive: user.isActive !== false,
         email: emailValue,
-        emailLower,
         createdAt: toIso(user.createdAt) || new Date().toISOString(),
         lastLogin: toIso(user.lastLogin) || new Date().toISOString(),
       };
@@ -950,8 +949,7 @@ async function upsertUser(userData) {
 
   if (!existing) {
     const emailValue = user.email ? String(user.email).trim() : null;
-    const emailLower = normalizeEmail(emailValue);
-    const normalizedEmail = emailLower;
+    const hasEmail = !!emailValue;
     user = {
       ...user,
       authType: normalizeAuthType(user.authType) ??
@@ -959,7 +957,7 @@ async function upsertUser(userData) {
           ? 'GUEST'
           : user.passwordHash
             ? 'MAIL'
-            : normalizedEmail
+            : hasEmail
               ? 'MAIL'
               : 'LOCAL'),
       isGuest: Boolean(user.isGuest),
@@ -967,7 +965,6 @@ async function upsertUser(userData) {
       profileComplete: Boolean(user.profileComplete),
       isActive: user.isActive !== false,
       email: emailValue,
-      emailLower,
       createdAt: toIso(user.createdAt) || new Date().toISOString(),
       lastLogin: toIso(user.lastLogin) || new Date().toISOString(),
     };
@@ -1040,16 +1037,14 @@ async function updateUserById(userId, updates) {
     const items = loadDevStore();
     if (safeUpdates.email) {
       const normalizedEmail = normalizeEmail(safeUpdates.email);
-      const existingByEmail = items.find((u) => u.emailLower === normalizedEmail && String(u.userId) !== String(userId));
+      const existingByEmail = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizedEmail && String(u.userId) !== String(userId));
       if (existingByEmail) throw new Error('EMAIL_CONFLICT');
     }
 
     const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
     if (safeUpdates.email) {
       const emailValue = String(safeUpdates.email).trim();
-      const normalizedEmail = normalizeEmail(emailValue);
       merged.email = emailValue;
-      merged.emailLower = normalizedEmail;
     }
 
     const item = buildUserItem(merged);
@@ -1071,9 +1066,7 @@ async function updateUserById(userId, updates) {
   const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
   if (safeUpdates.email) {
     const emailValue = String(safeUpdates.email).trim();
-    const normalizedEmail = normalizeEmail(emailValue);
     merged.email = emailValue;
-    merged.emailLower = normalizedEmail;
   }
   const item = buildUserItem(merged);
   if (!TABLE_HAS_SORT_KEY) {
@@ -1093,9 +1086,7 @@ async function searchUsers(query, limit = 25) {
   if (!queryLower) return [];
   const expressionValues = {
     ':userType': 'USER',
-    ':query': queryLower,
   };
-  const filter = 'itemType = :userType AND (contains(userNameLower, :query) OR contains(userName, :query) OR contains(userId, :query) OR contains(emailLower, :query))';
 
   if (USE_DEV_STORE) {
     const items = loadDevStore();
@@ -1107,19 +1098,39 @@ async function searchUsers(query, limit = 25) {
     })()).slice(0, limit).map(normalizeDdbItem);
     return found;
   }
+  // Paginated scan with client-side filtering to avoid relying on legacy
+  // `userNameLower` / `emailLower` attributes which may not be present.
+  const projection = 'userId, userName, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, isOnline, createdAt, lastLogin, xp, itemType';
+  const expressionNames = { '#status': 'status' };
 
-  const result = await ddb.send(new ScanCommand({
-    TableName: TABLE_NAME,
-    FilterExpression: filter,
-    ExpressionAttributeValues: expressionValues,
-    ExpressionAttributeNames: {
-      '#status': 'status',
-    },
-    Limit: limit,
-    ProjectionExpression: 'userId, userName, userNameLower, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, isOnline, createdAt, lastLogin, xp, itemType',
-  }));
+  const matches = [];
+  let ExclusiveStartKey = null;
+  do {
+    const params = {
+      TableName: TABLE_NAME,
+      ProjectionExpression: projection,
+      ExpressionAttributeNames: expressionNames,
+      Limit: 1000,
+    };
+    if (ExclusiveStartKey) params.ExclusiveStartKey = ExclusiveStartKey;
 
-  return (result.Items || []).map(normalizeDdbItem);
+    const page = await ddb.send(new ScanCommand(params));
+    const items = (page.Items || []).map(normalizeDdbItem);
+
+    for (const it of items) {
+      const name = String(it.userName || '').toLowerCase();
+      const email = String(it.email || '').toLowerCase();
+      const id = String(it.userId || '').toLowerCase();
+      if (name.includes(queryLower) || email.includes(queryLower) || id.includes(queryLower)) {
+        matches.push(it);
+        if (matches.length >= limit) break;
+      }
+    }
+
+    ExclusiveStartKey = page.LastEvaluatedKey || null;
+  } while (ExclusiveStartKey && matches.length < limit);
+
+  return matches.slice(0, limit);
 }
 
 async function clearExpiredStatuses(cutoffIso) {
