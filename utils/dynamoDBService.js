@@ -26,6 +26,13 @@ if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
 function shouldUseDevStoreFallback() {
+  if (process.env.NODE_ENV === 'production') {
+    if (process.env.USE_DEV_STORE === 'true') {
+      console.error('[dynamoDBService] USE_DEV_STORE=true is not allowed in production. Production must use DynamoDB.');
+    }
+    return false;
+  }
+
   if (process.env.USE_DEV_STORE === 'true') {
     console.warn('[dynamoDBService] Local dev fallback store enabled explicitly via USE_DEV_STORE=true');
     return true;

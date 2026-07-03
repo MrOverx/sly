@@ -497,6 +497,10 @@ Logger.info('dynamodb', `🔐 DynamoDB region: ${DYNAMODB_REGION}, table: ${DYNA
 Logger.info('aws', `☁️ S3 uploads ${S3_CONFIGURED ? 'enabled' : 'disabled'}; bucket: ${AWS_S3_BUCKET || 'NOT_SET'}; publicUrl: ${AWS_S3_PUBLIC_URL || 'none'}; profileFolder: ${AWS_S3_PROFILE_FOLDER}`);
 if (!S3_CONFIGURED) {
   Logger.warn('aws', '⚠️ S3 uploads are disabled because AWS_S3_BUCKET is not configured. Upload endpoints will return S3_CONFIG_MISSING.');
+  if (process.env.NODE_ENV === 'production') {
+    Logger.error('aws', 'Refusing to start in production without AWS_S3_BUCKET configured. Configure S3 before starting the server.');
+    process.exit(1);
+  }
 }
 
 // ========== CONFIGURATION ==========
