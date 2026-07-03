@@ -30,7 +30,6 @@ if (envPathUsed) {
 } else {
   Logger.warn('env', 'No .env found in backend search paths; relying on process environment only');
 }
-
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || process.env.AWS_ENDPOINT || null;
 const hasAwsCreds = Boolean(
   process.env.AWS_ACCESS_KEY_ID ||

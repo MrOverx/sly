@@ -1042,17 +1042,58 @@ async function updateUserById(userId, updates) {
     }
   }
 
-  const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
+  // Build a non-destructive UpdateCommand so we don't accidentally overwrite
+  // the entire user item when only a few attributes need changing. This
+  // preserves any attributes not present in `safeUpdates`.
+  const key = TABLE_HAS_SORT_KEY ? buildUserPrimaryKey(userId) : { [TABLE_HASH_KEY]: userId };
+
+  const exprNames = {};
+  const exprValues = {};
+  const setParts = [];
+
+  // If email is being updated, also persist normalizedEmail for index lookups
   if (safeUpdates.email) {
-    const emailValue = String(safeUpdates.email).trim();
-    merged.email = emailValue;
+    const emailValue = safeUpdates.email ? String(safeUpdates.email).trim() : null;
+    exprNames['#email'] = 'email';
+    exprValues[':email'] = emailValue;
+    setParts.push('#email = :email');
+
+    const normalizedEmail = normalizeEmail(emailValue);
+    exprNames['#normalizedEmail'] = 'normalizedEmail';
+    exprValues[':normalizedEmail'] = normalizedEmail;
+    setParts.push('#normalizedEmail = :normalizedEmail');
   }
-  const item = buildUserItem(merged);
-  if (!TABLE_HAS_SORT_KEY) {
-    delete item.SK;
-  }
-  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
-  return item;
+
+  // Map other safe updates to SET expressions. Allow null values to be written
+  // explicitly so callers can clear attributes (e.g. profileImageUrl = null).
+  Object.entries(safeUpdates).forEach(([field, value]) => {
+    if (field === 'email') return; // already handled above
+    const nameKey = `#${field}`;
+    const valKey = `:${field}`;
+    exprNames[nameKey] = field;
+    exprValues[valKey] = value;
+    setParts.push(`${nameKey} = ${valKey}`);
+  });
+
+  // Always update updatedAt to indicate mutation
+  exprNames['#updatedAt'] = 'updatedAt';
+  exprValues[':now'] = new Date().toISOString();
+  setParts.push('#updatedAt = :now');
+
+  const updateExpression = setParts.length ? `SET ${setParts.join(', ')}` : undefined;
+
+  const params = {
+    TableName: TABLE_NAME,
+    Key: key,
+    ReturnValues: 'ALL_NEW',
+  };
+  if (updateExpression) params.UpdateExpression = updateExpression;
+  if (Object.keys(exprNames).length) params.ExpressionAttributeNames = exprNames;
+  if (Object.keys(exprValues).length) params.ExpressionAttributeValues = exprValues;
+
+  const result = await ddb.send(new UpdateCommand(params));
+  const updatedItem = result.Attributes ? normalizeDdbItem(result.Attributes) : await getUserById(userId);
+  return updatedItem;
 }
 
 async function deleteUserById(userId) {
