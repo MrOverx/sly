@@ -1603,10 +1603,18 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
       });
     }
 
+    // ✅ Get and return the updated current user to preserve all profile fields
+    let updatedCurrentUser = userCache.get(userId);
+    if (!updatedCurrentUser) {
+      updatedCurrentUser = await getUserById(userId);
+      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Friend request canceled',
       request: canceledPayload,
+      currentUser: updatedCurrentUser || senderUser,
     });
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
@@ -1678,11 +1686,18 @@ app.post('/friends/add', async (req, res) => {
     // Build outgoing payload for sender response, so fromUser fields reflect the target recipient
     const senderResponsePayload = buildFriendRequestPayload(friendRequest, userId, senderUser, recipientUser);
 
+    // ✅ Fetch the updated current user with all profile fields preserved
+    let updatedCurrentUser = await getUserById(userId);
+    if (updatedCurrentUser) {
+      userCache.set(userId, updatedCurrentUser);
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
       request: senderResponsePayload,
       requestId: friendRequest.requestId,
+      currentUser: updatedCurrentUser || senderUser,
     });
   } catch (err) {
     Logger.error('friends/add', 'Error sending friend request', err.message);
@@ -1736,17 +1751,25 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
 
     Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
 
-    // Get updated user data with complete profile
+    // Get updated user data with complete profile (parallelize fetches)
     let senderUser = userCache.get(friendRequest.userId);
-    if (!senderUser) {
-      senderUser = await getUserById(friendRequest.userId);
-      if (senderUser) userCache.set(friendRequest.userId, senderUser);
-    }
-
     let recipientUser = userCache.get(friendRequest.friendId);
-    if (!recipientUser) {
-      recipientUser = await getUserById(friendRequest.friendId);
-      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
+    const toFetch = [];
+    if (!senderUser) toFetch.push({ id: friendRequest.userId, key: friendRequest.userId, as: 'sender' });
+    if (!recipientUser) toFetch.push({ id: friendRequest.friendId, key: friendRequest.friendId, as: 'recipient' });
+
+    if (toFetch.length > 0) {
+      const promises = toFetch.map((t) => getUserById(t.id));
+      const fetched = await Promise.all(promises);
+      for (let idx = 0; idx < fetched.length; idx++) {
+        const t = toFetch[idx];
+        const u = fetched[idx];
+        if (u) {
+          userCache.set(t.key, u);
+          if (t.as === 'sender') senderUser = u;
+          if (t.as === 'recipient') recipientUser = u;
+        }
+      }
     }
 
     // Emit socket events with normalized friend request payload to the sender
@@ -1777,10 +1800,56 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       });
     }
 
+    // ✅ Get and return the updated current user to preserve all profile fields
+    let updatedCurrentUser = userCache.get(userId);
+    if (!updatedCurrentUser) {
+      updatedCurrentUser = await getUserById(userId);
+      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
+    }
+
+    // ✅ OPTIMIZATION: Return updated friend list so frontend can immediately show new friend
+    const updatedFriendIds = await listFriendsForUser(userId);
+    const friendIds = updatedFriendIds.map((id) => normalizeId(id)).filter(Boolean);
+    const cachedFriends = userCache.batchGet(friendIds);
+    const missingFriendIds = friendIds.filter((id) => !cachedFriends.get(id));
+
+    let freshFriends = [];
+    if (missingFriendIds.length > 0) {
+      freshFriends = await getUsersByIds(missingFriendIds);
+      freshFriends.forEach((u) => {
+        const normalizedId = normalizeId(u.userId);
+        if (normalizedId) {
+          userCache.set(normalizedId, u);
+        }
+      });
+    }
+
+    const friendUserMap = new Map();
+    for (const user of Array.from(cachedFriends.values()).filter(Boolean)) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        friendUserMap.set(normalizedId, user);
+      }
+    }
+    for (const user of freshFriends) {
+      const normalizedId = normalizeId(user.userId);
+      if (normalizedId) {
+        friendUserMap.set(normalizedId, user);
+      }
+    }
+
+    const updatedFriendsList = friendIds
+      .map((id) => friendUserMap.get(id))
+      .filter(Boolean)
+      .map((u) => buildCompleteUserProfile(u));
+
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
       request: acceptedPayload,
+      currentUser: updatedCurrentUser || recipientUser,
+      newFriend: recipientNewFriendPayload || senderNewFriendPayload,
+      updatedFriendsList,
     });
   } catch (err) {
     Logger.error('friends/request/accept', 'Error accepting friend request', err.message);
@@ -1850,10 +1919,18 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
       });
     }
 
+    // ✅ Get and return the updated current user to preserve all profile fields
+    let updatedCurrentUser = userCache.get(userId);
+    if (!updatedCurrentUser) {
+      updatedCurrentUser = await getUserById(userId);
+      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
       request: deniedPayload,
+      currentUser: updatedCurrentUser || recipientUser,
     });
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
@@ -1909,10 +1986,17 @@ app.post('/friends/remove', async (req, res) => {
       });
     }
 
+    // ✅ Get and return the updated current user to preserve all profile fields
+    let updatedCurrentUser = userCache.get(userId);
+    if (!updatedCurrentUser) {
+      updatedCurrentUser = await getUserById(userId);
+      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Friend removed successfully',
+      currentUser: updatedCurrentUser,
     });
   } catch (err) {
     Logger.error('friends/remove', 'Error removing friend', err.message);

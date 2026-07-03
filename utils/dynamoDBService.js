@@ -1101,7 +1101,7 @@ async function searchUsers(query, limit = 25) {
       '#status': 'status',
     },
     Limit: limit,
-    ProjectionExpression: 'userId, userName, userNameLower, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, createdAt, lastLogin, xp, itemType',
+    ProjectionExpression: 'userId, userName, userNameLower, email, gender, country, #status, bio, interests, avatarColor, avatarLetter, profileImageUrl, profileImagePath, authType, isGuest, isOnline, createdAt, lastLogin, xp, itemType',
   }));
 
   return (result.Items || []).map(normalizeDdbItem);
