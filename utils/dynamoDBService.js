@@ -954,6 +954,36 @@ async function upsertUser(userData) {
     delete item.SK;
   }
 
+  // If this is a new user (no existing), perform a conditional Put so we do
+  // not accidentally overwrite an existing DB record created concurrently
+  // by another process. If the condition fails, read and return the
+  // existing item to avoid creating a lightweight placeholder that would
+  // drop real profile fields.
+  if (!existing) {
+    const putParams = {
+      TableName: TABLE_NAME,
+      Item: item,
+      // Condition: the partition key must not already exist
+      ConditionExpression: `attribute_not_exists(${TABLE_HASH_KEY})`,
+    };
+    // If table has sort key, also ensure the SK doesn't exist (safeguard)
+    if (TABLE_HAS_SORT_KEY && TABLE_RANGE_KEY) {
+      putParams.ConditionExpression = `attribute_not_exists(${TABLE_HASH_KEY}) AND attribute_not_exists(${TABLE_RANGE_KEY})`;
+    }
+
+    try {
+      await ddb.send(new PutCommand(putParams));
+      return item;
+    } catch (err) {
+      // If conditional check fails, read the current item and return it
+      if (err && err.name === 'ConditionalCheckFailedException') {
+        const current = await getUserById(userData.userId);
+        return current || item;
+      }
+      throw err;
+    }
+  }
+
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   return item;
 }
