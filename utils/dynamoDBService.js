@@ -583,6 +583,9 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     status: request.status || 'pending',
     createdAt: request.createdAt || null,
     isIncoming,
+    isOutgoing: !isIncoming,
+    itemType: 'FRIEND',
+    type: isIncoming ? 'friend_request' : 'friend_request_outgoing',
   };
 }
 
@@ -603,6 +606,8 @@ function serializeFriendForClient(user) {
     name: displayName,
     displayName: displayName,
     email: user.email || null,
+    emailLower: user.emailLower || null,
+    passwordHash: user.passwordHash || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
     profileImageUrl,

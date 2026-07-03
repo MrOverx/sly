@@ -1753,18 +1753,27 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     const senderSocketId = userSockets.get(friendRequest.userId);
     const acceptedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
     acceptedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
+    const senderNewFriendPayload = buildCompleteUserProfile(recipientUser);
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
         ...acceptedPayload,
-        newFriend: buildCompleteUserProfile(recipientUser),
+        newFriend: senderNewFriendPayload,
+      });
+
+      // Also notify the sender directly that a new friend was added.
+      io.to(senderSocketId).emit('friend_added', {
+        newFriend: senderNewFriendPayload,
+        message: `${recipientUser?.userName || 'Someone'} accepted your friend request`,
       });
     }
 
     // Notify the recipient about the new friend relationship if connected
     const recipientSocketId = userSockets.get(userId);
+    const recipientNewFriendPayload = buildCompleteUserProfile(senderUser);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_added', {
-        newFriend: buildCompleteUserProfile(senderUser),
+        newFriend: recipientNewFriendPayload,
+        message: `${senderUser?.userName || 'Someone'} is now your friend`,
       });
     }
 
