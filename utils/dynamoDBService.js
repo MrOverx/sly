@@ -712,6 +712,7 @@ async function getUserById(userId) {
 
 async function getUserByEmail(email) {
   const emailLower = normalizeEmail(email);
+  Logger.debug('dynamoDBService', 'getUserByEmail called', { rawEmail: email, normalized: emailLower });
   if (!emailLower) return null;
 
   if (USE_DEV_STORE) {
@@ -744,6 +745,7 @@ async function getUserByEmail(email) {
       }));
 
       EMAIL_INDEX_AVAILABLE = true;
+      Logger.debug('dynamoDBService', 'EmailIndex appears available (initial probe)', { email: emailLower });
       if (result.Items && result.Items.length) {
         return normalizeDdbItem(result.Items[0]);
       }
@@ -767,6 +769,8 @@ async function getUserByEmail(email) {
       Limit: 1,
     }));
 
+    Logger.debug('dynamoDBService', 'EmailIndex query executed (cached available)', { email: emailLower, items: result.Items && result.Items.length });
+
     if (result.Items && result.Items.length) {
       return normalizeDdbItem(result.Items[0]);
     }
@@ -778,6 +782,8 @@ async function getUserByEmail(email) {
     ExpressionAttributeValues: { ':emailLower': emailLower },
     Limit: 1,
   }));
+
+  Logger.debug('dynamoDBService', 'Scan fallback executed', { email: emailLower, items: scan.Items && scan.Items.length });
 
   if (scan.Items && scan.Items.length) {
     return normalizeDdbItem(scan.Items[0]);
@@ -811,6 +817,8 @@ async function getUserByEmail(email) {
 
 async function findUserByLookup(lookup) {
   if (!lookup || typeof lookup !== 'object') return null;
+
+  Logger.debug('dynamoDBService', 'findUserByLookup called', { lookup });
 
   if (lookup.userId) {
     return getUserById(String(lookup.userId).trim());

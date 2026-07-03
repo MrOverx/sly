@@ -200,6 +200,18 @@ const health = require('./utils/health');
 // Set log level based on environment
 Logger.setLevel(process.env.NODE_ENV === 'development' ? Logger.LOG_LEVELS.DEBUG : Logger.LOG_LEVELS.INFO);
 
+// Safety: Prevent accidentally running with the local JSON dev store in production.
+try {
+  const { isDevStoreEnabled: _isDevStoreEnabled } = require('./utils/dynamoDBService');
+  if (process.env.NODE_ENV === 'production' && _isDevStoreEnabled && _isDevStoreEnabled()) {
+    Logger.error('startup', 'Refusing to start in production while local dev store is enabled. Set USE_DEV_STORE=false and provide AWS credentials.');
+    process.exit(1);
+  }
+} catch (e) {
+  // If the module cannot be resolved for some reason, log a warning but continue.
+  Logger.warn('startup', 'Failed to verify dev store state during startup', e && e.message);
+}
+
 const app = express();
 const server = http.createServer(app);
 
@@ -988,10 +1000,9 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
 
 // ========== NEW: LOGIN ENDPOINT ==========
 app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res) => {
-  if (isDevStoreEnabled()) {
-    return sendError(res, 503, 'Local development store is disabled for login; please connect to DynamoDB', 'DB_NOT_CONNECTED');
-  }
-  if (!await isDatabaseConnected()) {
+  // Allow login against local dev store during development; if not using dev store,
+  // require a live database connection.
+  if (!isDevStoreEnabled() && !await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
   try {
