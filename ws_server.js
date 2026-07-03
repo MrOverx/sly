@@ -31,6 +31,23 @@ if (envPathUsed) {
   Logger.warn('env', 'No .env found in backend search paths; relying on process environment only');
 }
 
+const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || process.env.AWS_ENDPOINT || null;
+const hasAwsCreds = Boolean(
+  process.env.AWS_ACCESS_KEY_ID ||
+  process.env.AWS_SECRET_ACCESS_KEY ||
+  process.env.AWS_SESSION_TOKEN ||
+  process.env.AWS_PROFILE ||
+  process.env.AWS_DEFAULT_PROFILE ||
+  process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
+  process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
+  process.env.AWS_ROLE_ARN
+);
+
+if (process.env.NODE_ENV === 'production' && !hasAwsCreds) {
+  Logger.error('config', 'Production requires AWS credentials or an IAM role. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure instance credentials.');
+  process.exit(1);
+}
+
 const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');

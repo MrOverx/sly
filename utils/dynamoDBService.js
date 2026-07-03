@@ -44,30 +44,9 @@ function shouldUseDevStoreFallback() {
     return false;
   }
 
-  // Explicit local DynamoDB endpoint is still allowed for local development,
-  // but otherwise the server should not silently fall back to a JSON store.
-  if (DYNAMODB_ENDPOINT) return false;
-
-  // Default: do not enable dev store fallback unless explicitly requested.
-  // If no AWS credentials are available and no explicit DynamoDB endpoint is set,
-  // enable the dev store to make local development and tests deterministic.
-  const hasAwsCreds = Boolean(
-    process.env.AWS_ACCESS_KEY_ID ||
-    process.env.AWS_SECRET_ACCESS_KEY ||
-    process.env.AWS_SESSION_TOKEN ||
-    process.env.AWS_PROFILE ||
-    process.env.AWS_DEFAULT_PROFILE ||
-    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
-    process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
-    process.env.AWS_ROLE_ARN
-  );
-
-  if (!hasAwsCreds && !DYNAMODB_ENDPOINT) {
-    console.info('[dynamoDBService] No AWS credentials found; enabling local dev fallback store');
-    return true;
-  }
-
-  return false;
+  // Default behavior: do not use local JSON fallback unless explicitly requested
+  // or when running automated tests.
+  return isTestProcess;
 }
 
 // Development fallback: simple JSON-backed store when running locally without DynamoDB.
