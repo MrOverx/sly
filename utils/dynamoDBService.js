@@ -25,28 +25,57 @@ const clientOptions = { region: AWS_REGION };
 if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
 const client = new DynamoDBClient(clientOptions);
 
+function hasAwsCredentials() {
+  return Boolean(
+    process.env.AWS_ACCESS_KEY_ID ||
+    process.env.AWS_SECRET_ACCESS_KEY ||
+    process.env.AWS_SESSION_TOKEN ||
+    process.env.AWS_PROFILE ||
+    process.env.AWS_DEFAULT_PROFILE ||
+    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
+    process.env.AWS_WEB_IDENTITY_TOKEN_FILE ||
+    process.env.AWS_ROLE_ARN
+  );
+}
+
 function shouldUseDevStoreFallback() {
   const isTestProcess = typeof process.env.JEST_WORKER_ID !== 'undefined' || process.env.NODE_ENV === 'test';
+  const explicitTrue = process.env.USE_DEV_STORE === 'true';
+  const explicitFalse = process.env.USE_DEV_STORE === 'false';
+  const hasCreds = hasAwsCredentials();
+
   if (process.env.NODE_ENV === 'production' && !isTestProcess) {
-    if (process.env.USE_DEV_STORE === 'true') {
+    if (explicitTrue) {
       console.error('[dynamoDBService] USE_DEV_STORE=true is not allowed in production. Production must use DynamoDB.');
     }
     return false;
   }
 
-  if (process.env.USE_DEV_STORE === 'true') {
+  if (explicitTrue) {
     console.warn('[dynamoDBService] Local dev fallback store enabled explicitly via USE_DEV_STORE=true');
     return true;
   }
 
-  if (process.env.USE_DEV_STORE === 'false') {
+  if (explicitFalse) {
     console.info('[dynamoDBService] Local dev fallback store disabled explicitly via USE_DEV_STORE=false');
     return false;
   }
 
-  // Default behavior: do not use local JSON fallback unless explicitly requested
-  // or when running automated tests.
-  return isTestProcess;
+  if (DYNAMODB_ENDPOINT) {
+    console.info('[dynamoDBService] Using local DynamoDB endpoint:', DYNAMODB_ENDPOINT);
+    return false;
+  }
+
+  if (hasCreds) {
+    return false;
+  }
+
+  if (isTestProcess) {
+    return true;
+  }
+
+  console.warn('[dynamoDBService] No AWS credentials detected; falling back to local JSON dev store. Set USE_DEV_STORE=false and provide credentials to use DynamoDB.');
+  return true;
 }
 
 // Development fallback: simple JSON-backed store when running locally without DynamoDB.
