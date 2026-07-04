@@ -57,7 +57,11 @@ function shouldUseDevStoreFallback() {
   }
 
   if (explicitFalse) {
-    console.info('[dynamoDBService] Local dev fallback store disabled explicitly via USE_DEV_STORE=false');
+    if (!hasCreds && !DYNAMODB_ENDPOINT && !isTestProcess) {
+      console.error('[dynamoDBService] USE_DEV_STORE=false and no AWS credentials or DynamoDB endpoint is configured. DynamoDB access will fail unless credentials are provided.');
+    } else {
+      console.info('[dynamoDBService] Local dev fallback store disabled explicitly via USE_DEV_STORE=false');
+    }
     return false;
   }
 
@@ -78,8 +82,9 @@ function shouldUseDevStoreFallback() {
   return true;
 }
 
-// Development fallback: simple JSON-backed store when running locally without DynamoDB.
-// It is enabled automatically when no AWS credentials are present so local signup flows still persist data.
+// Development fallback: simple JSON-backed store used only when explicitly requested,
+// when running tests, or when no DynamoDB credentials/endpoint are present and
+// USE_DEV_STORE is not explicitly set to false.
 const USE_DEV_STORE = shouldUseDevStoreFallback();
 const DEV_STORE_PATH = path.resolve(__dirname, '..', 'dev_dynamo_users.json');
 
