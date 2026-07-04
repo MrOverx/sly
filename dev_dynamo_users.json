@@ -1,1 +1,62 @@
-[]
+[
+  {
+    "PK": "USER#u1",
+    "SK": "METADATA",
+    "itemType": "USER",
+    "userId": "u1",
+    "userName": "Alice",
+    "email": "alice@example.com",
+    "authType": "MAIL",
+    "isGuest": false,
+    "gender": "female",
+    "country": "USA",
+    "status": null,
+    "statusUpdatedAt": null,
+    "bio": "Hello world",
+    "interests": [
+      "travel",
+      "music"
+    ],
+    "birthDate": null,
+    "profileComplete": true,
+    "avatarColor": "#4A90E2",
+    "avatarLetter": "A",
+    "useColorProfile": true,
+    "hasProfileChanged": true,
+    "isFriend": false,
+    "isOnline": true,
+    "profileImageUrl": "https://example.com/alice.png",
+    "profileImagePath": null,
+    "pictureName": null,
+    "passwordHash": null,
+    "emailVerified": false,
+    "emailVerifiedAt": null,
+    "isActive": true,
+    "xp": {
+      "base": 120,
+      "daily": 20
+    },
+    "likedUserIds": [
+      "u3"
+    ],
+    "friendIds": [],
+    "friends": [],
+    "friendRequests": {
+      "sent": [
+        {
+          "requestId": "req-u1-u2",
+          "toUserId": "u2",
+          "status": "pending",
+          "createdAt": "2026-07-01T10:00:00.000Z"
+        }
+      ],
+      "received": []
+    },
+    "pendingFriendRequests": [],
+    "lastDailyXpAwardedAt": "2026-06-30T08:00:00.000Z",
+    "createdAt": "2026-07-04T05:03:08.529Z",
+    "updatedAt": "2026-07-04T05:03:08.529Z",
+    "lastLogin": "2026-07-04T05:03:08.529Z",
+    "normalizedEmail": "alice@example.com"
+  }
+]

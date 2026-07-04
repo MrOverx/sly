@@ -1694,7 +1694,7 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
-    const friendRequest = await createFriendRequest(userId, friendId);
+    const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
 
     userCache.invalidate(userId);
     userCache.invalidate(friendId);
@@ -1726,7 +1726,7 @@ app.post('/friends/add', async (req, res) => {
       message: 'Friend request sent',
       request: senderResponsePayload,
       requestId: friendRequest.requestId,
-      currentUser: updatedCurrentUser || senderUser,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser),
     });
   } catch (err) {
     Logger.error('friends/add', 'Error sending friend request', err.message);
