@@ -23,6 +23,7 @@ class Logger {
   static _rateLimitMaxEntries = 1;
   static sensitiveKeys = ['password', 'token', 'secret', 'authorization', 'cookie', 'apikey', 'session', 'email'];
   static _persistenceEnabled = process.env.NODE_ENV !== 'test';
+  static _consoleEnabled = process.env.LOGGER_CONSOLE_ENABLED !== 'false';
   static _dynamoTableName = process.env.LOGGER_DYNAMODB_TABLE || process.env.DYNAMODB_TABLE || 'oververseDB';
   static _logFilePath = process.env.LOGGER_FILE_PATH
     ? path.resolve(process.env.LOGGER_FILE_PATH)
@@ -184,11 +185,13 @@ class Logger {
 
     this._rateLimitBuckets.set(bucketKey, { count: 1, lastSeen: now });
 
-    const logFn = level === this.LOG_LEVELS.ERROR ? console.error : console.log;
-    if (sanitizedData !== null) {
-      logFn(logEntry, sanitizedData);
-    } else {
-      logFn(logEntry);
+    if (this._consoleEnabled) {
+      const logFn = level === this.LOG_LEVELS.ERROR ? console.error : console.log;
+      if (sanitizedData !== null) {
+        logFn(logEntry, sanitizedData);
+      } else {
+        logFn(logEntry);
+      }
     }
 
     this._persistLogEntry(level, context, message, data);

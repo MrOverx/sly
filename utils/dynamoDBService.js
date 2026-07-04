@@ -565,11 +565,67 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
   return nextRequests;
 }
 
+function removeFriendRequestReference(existingRequests = [], requestItem) {
+  const senderId = normalizeIdValue(requestItem?.userId || requestItem?.senderId || requestItem?.fromUserId || null);
+  const recipientId = normalizeIdValue(requestItem?.recipientId || requestItem?.friendId || requestItem?.toUserId || requestItem?.recipientUserId || null);
+  const requestId = normalizeIdValue(requestItem?.requestId || `${senderId}|${recipientId}`);
+
+  if (!requestId) return existingRequests;
+
+  if (isObjectFriendRequests(existingRequests)) {
+    const nextEntries = {};
+    for (const bucket of ['sent', 'received']) {
+      const bucketEntries = normalizeFriendRequestEntries(existingRequests[bucket]);
+      nextEntries[bucket] = bucketEntries.filter((entry) => {
+        if (!entry || typeof entry !== 'object') return true;
+        const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+        return candidateId !== requestId;
+      });
+    }
+    return nextEntries;
+  }
+
+  const nextRequests = Array.isArray(existingRequests) ? existingRequests.filter(Boolean) : [];
+  return nextRequests.filter((entry) => {
+    if (!entry || typeof entry !== 'object') return true;
+    const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+    return candidateId !== requestId;
+  });
+}
+
+function mergeFriendList(existingFriends = [], friendId) {
+  const normalizedFriendId = normalizeIdValue(friendId);
+  if (!normalizedFriendId) return Array.isArray(existingFriends) ? existingFriends : [];
+
+  const nextFriends = Array.isArray(existingFriends)
+    ? existingFriends.filter(Boolean).map((entry) => {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          const currentFriendId = normalizeIdValue(entry.friendId || entry.userId || entry.id || '');
+          return currentFriendId ? { ...entry, friendId: currentFriendId, addedAt: entry.addedAt || new Date().toISOString() } : null;
+        }
+        return { friendId: normalizeIdValue(entry), addedAt: new Date().toISOString() };
+      }).filter(Boolean)
+    : [];
+
+  const alreadyExists = nextFriends.some((entry) => normalizeIdValue(entry.friendId || entry.userId || entry.id || '') === normalizedFriendId);
+  if (!alreadyExists) {
+    nextFriends.push({ friendId: normalizedFriendId, addedAt: new Date().toISOString() });
+  }
+
+  return nextFriends;
+}
+
 async function persistFriendRequestOnUser(userId, requestItem, status = 'pending') {
   if (!userId || !requestItem) return null;
 
   const currentUser = await getUserById(userId);
   const nextRequests = mergeFriendRequestReference(currentUser?.friendRequests, requestItem, status, userId);
+  const nextFriends = status === 'accepted'
+    ? mergeFriendList(currentUser?.friends || currentUser?.friendIds || [], requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)
+    : (Array.isArray(currentUser?.friends) ? currentUser.friends : []);
+  const nextFriendIds = status === 'accepted'
+    ? [...new Set([...(Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []), normalizeIdValue(requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)])]
+    : (Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []);
 
   if (!currentUser) {
     const snapshot = buildUserSnapshot(
@@ -593,6 +649,8 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
       gender: snapshot?.gender,
       country: snapshot?.country,
       status: snapshot?.status,
+      friends: nextFriends,
+      friendIds: nextFriendIds,
       bio: snapshot?.bio,
       interests: snapshot?.interests,
       xp: snapshot?.xp,
@@ -607,6 +665,8 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
   const updatedUser = await updateUserById(userId, {
     friendRequests: nextRequests,
     pendingFriendRequests: nextRequests,
+    friends: nextFriends,
+    friendIds: nextFriendIds,
     updatedAt: new Date().toISOString(),
   });
 
@@ -1443,14 +1503,43 @@ async function updateFriendRequestStatus(userId, friendId, status) {
 
 async function deleteFriendRequest(userId, friendId) {
   if (!USE_DEV_STORE) await loadTableSchema();
+  const requestItem = { userId, friendId, requestId: `${normalizeIdValue(userId)}|${normalizeIdValue(friendId)}` };
+
   if (USE_DEV_STORE) {
     const items = getDevStoreFriendItems();
     const filtered = items.filter((item) => !(String(item.userId) === String(userId) && String(item.friendId) === String(friendId)));
     saveDevStore(filtered);
+    await Promise.all([
+      removeFriendRequestReferenceFromUser(userId, requestItem),
+      removeFriendRequestReferenceFromUser(friendId, requestItem),
+    ]);
     return filtered;
   }
 
-  return ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`) }));
+  await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: buildItemKey(FRIEND_PREFIX, userId, `${FRIEND_PREFIX}${friendId}`) }));
+  await Promise.all([
+    removeFriendRequestReferenceFromUser(userId, requestItem),
+    removeFriendRequestReferenceFromUser(friendId, requestItem),
+  ]);
+  return null;
+}
+
+async function removeFriendRequestReferenceFromUser(userId, requestItem) {
+  if (!userId) return null;
+  const currentUser = await getUserById(userId);
+  if (!currentUser) return null;
+
+  const nextRequests = removeFriendRequestReference(currentUser.friendRequests, requestItem);
+  const nextFriends = Array.isArray(currentUser.friends) ? currentUser.friends : [];
+  const nextFriendIds = Array.isArray(currentUser.friendIds) ? currentUser.friendIds : [];
+
+  return updateUserById(userId, {
+    friendRequests: nextRequests,
+    pendingFriendRequests: nextRequests,
+    friends: nextFriends,
+    friendIds: nextFriendIds,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 async function getFriendRequestByRequestId(requestId) {
@@ -1943,20 +2032,22 @@ async function acceptFriendRequestTransaction(requestItem) {
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: acceptedFriendItem1 } });
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: acceptedFriendItem2 } });
 
-  // Also update the user records to include friendIds (store only IDs, no snapshots)
+  // Also update the user records to include friendIds and friend refs (store only IDs + lightweight refs)
   const senderUserKey = buildItemKey(USER_PREFIX, senderId);
   const recipientUserKey = buildItemKey(USER_PREFIX, recipientId);
+  const friendRefNow = new Date().toISOString();
 
   // Add recipientId to sender's friendIds if not present
   transactItems.push({
     Update: {
       TableName: TABLE_NAME,
       Key: senderUserKey,
-      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), updatedAt = :now',
+      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), friends = list_append(if_not_exists(friends, :emptyList), :friendRef), updatedAt = :now',
       ConditionExpression: 'attribute_not_exists(friendIds) OR NOT contains(friendIds, :friendId)',
       ExpressionAttributeValues: {
         ':emptyList': [],
         ':toAdd': [recipientId],
+        ':friendRef': [{ friendId: recipientId, addedAt: friendRefNow }],
         ':friendId': recipientId,
         ':now': new Date().toISOString(),
       },
@@ -1968,11 +2059,12 @@ async function acceptFriendRequestTransaction(requestItem) {
     Update: {
       TableName: TABLE_NAME,
       Key: recipientUserKey,
-      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), updatedAt = :now',
+      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), friends = list_append(if_not_exists(friends, :emptyList), :friendRef), updatedAt = :now',
       ConditionExpression: 'attribute_not_exists(friendIds) OR NOT contains(friendIds, :friendId)',
       ExpressionAttributeValues: {
         ':emptyList': [],
         ':toAdd': [senderId],
+        ':friendRef': [{ friendId: senderId, addedAt: friendRefNow }],
         ':friendId': senderId,
         ':now': new Date().toISOString(),
       },
@@ -2047,7 +2139,7 @@ async function acceptFriendRequestTransaction(requestItem) {
       replaceOrPush(items, item1);
       replaceOrPush(items, item2);
 
-      // Update USER records in dev store to include friendIds (ID-only)
+      // Update USER records in dev store to include friendIds and friend refs (ID + lightweight ref)
       function upsertFriendIdForUser(arr, targetUserId, newFriendId) {
         const userIndex = arr.findIndex((e) => e.itemType === 'USER' && (String(e.userId) === String(targetUserId) || (e.PK && e.PK.includes(targetUserId))));
         if (userIndex >= 0) {
@@ -2055,13 +2147,20 @@ async function acceptFriendRequestTransaction(requestItem) {
           const existingFriends = Array.isArray(user.friendIds) ? user.friendIds : [];
           if (!existingFriends.map(String).includes(String(newFriendId))) {
             user.friendIds = existingFriends.concat([newFriendId]);
-            user.updatedAt = new Date().toISOString();
-            arr[userIndex] = user;
           }
+          const existingFriendRefs = Array.isArray(user.friends) ? user.friends : [];
+          const friendRef = { friendId: String(newFriendId), addedAt: new Date().toISOString() };
+          const alreadyHasFriendRef = existingFriendRefs.some((entry) => String(entry?.friendId || entry?.userId || entry?.id || '') === String(newFriendId));
+          if (!alreadyHasFriendRef) {
+            user.friends = existingFriendRefs.concat([friendRef]);
+          }
+          user.updatedAt = new Date().toISOString();
+          arr[userIndex] = user;
         } else {
           // If no user record found, create a lightweight USER placeholder with friendIds
           const userItem = buildUserItem({ userId: targetUserId, userName: targetUserId });
           userItem.friendIds = [newFriendId];
+          userItem.friends = [{ friendId: String(newFriendId), addedAt: new Date().toISOString() }];
           userItem.updatedAt = new Date().toISOString();
           arr.push(userItem);
         }
@@ -2164,6 +2263,9 @@ module.exports = {
   countFriendsForUser,
   getUsersByIds,
   getActiveBlock,
+  mergeFriendRequestReference,
+  removeFriendRequestReference,
+  mergeFriendList,
   putBlockedUser,
   deleteBlock,
   getReportsForUser,

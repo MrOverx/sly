@@ -53,6 +53,8 @@ const socketIO = require('socket.io');
 const bcrypt = require('bcryptjs');
 const compression = require('compression');
 const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 const {
   isDbConnected,
   isDevStoreEnabled,
@@ -329,6 +331,8 @@ app.use(helmet()); // ✅ Security headers (X-Frame-Options, Content-Security-Po
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
+// Parse cookies for refresh-token endpoints
+app.use(cookieParser());
 
 // Create rate limiters before routes that depend on them.
 const registerLimiter = createRateLimiter('register', 20, 60 * 60); // 20 per hour
@@ -941,6 +945,35 @@ app.get('/room/by-invite/:code', (req, res) => {
   }
 });
 
+// Helper: sign access and refresh tokens for a user
+function signTokensForUser(user) {
+  const accessSecret = process.env.JWT_SECRET || 'dev_jwt_secret';
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || accessSecret;
+  const accessTtl = process.env.JWT_ACCESS_EXPIRES || '15m';
+  const refreshTtl = process.env.JWT_REFRESH_EXPIRES || '30d';
+
+  const accessToken = jwt.sign({ sub: user.userId, email: user.email, authType: user.authType }, accessSecret, { expiresIn: accessTtl });
+  const refreshToken = jwt.sign({ sub: user.userId }, refreshSecret, { expiresIn: refreshTtl });
+  return { accessToken, refreshToken };
+}
+
+function authenticateAccessToken(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!accessToken) {
+    return sendError(res, 401, 'Authentication required', 'AUTH_REQUIRED');
+  }
+
+  try {
+    const decoded = jwt.verify(accessToken, process.env.JWT_SECRET || 'dev_jwt_secret');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return sendError(res, 401, 'Invalid or expired access token', 'INVALID_TOKEN');
+  }
+}
+
 // ========== NEW: REGISTER ENDPOINT ==========
 app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
@@ -1004,13 +1037,37 @@ app.post('/auth/register', registerLimiter, validateRegistration, asyncHandler(a
 
     Logger.info('auth/register', '✅ New user registered', { userId: newUserId, email: normalizedEmail });
 
-    return sendSuccess(res, {
-      user: {
-        ...buildCompleteUserProfile(savedUser),
-        lastLogin: savedUser.lastLogin,
-        createdAt: savedUser.createdAt,
-      },
-    }, 'User registered successfully');
+    // Issue JWT tokens (access + refresh) and set refresh token as HttpOnly cookie
+    try {
+      const tokens = signTokensForUser(savedUser);
+      const refreshCookieOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        path: '/',
+      };
+      res.cookie('refreshToken', tokens.refreshToken, refreshCookieOptions);
+
+      return sendSuccess(res, {
+        accessToken: tokens.accessToken,
+        user: {
+          ...buildCompleteUserProfile(savedUser),
+          lastLogin: savedUser.lastLogin,
+          createdAt: savedUser.createdAt,
+        },
+      }, 'User registered successfully');
+    } catch (tokenErr) {
+      Logger.error('auth/register', 'Failed to sign JWT tokens', tokenErr && tokenErr.message);
+      // Fall back to returning user without tokens
+      return sendSuccess(res, {
+        user: {
+          ...buildCompleteUserProfile(savedUser),
+          lastLogin: savedUser.lastLogin,
+          createdAt: savedUser.createdAt,
+        },
+      }, 'User registered successfully');
+    }
   } catch (err) {
     Logger.error('auth/register', 'Error registering user', err.message);
     return sendError(res, 500, 'Registration error', { details: err.message });
@@ -1088,6 +1145,38 @@ app.post('/auth/login', loginLimiter, validateAuth, asyncHandler(async (req, res
   } catch (err) {
     Logger.error('auth/login', 'Error during login', err.message);
     return sendError(res, 500, 'Login error', { details: err.message });
+  }
+}));
+
+app.post('/auth/refresh', asyncHandler(async (req, res) => {
+  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || null;
+  if (!refreshToken) {
+    return sendError(res, 401, 'Refresh token is required', 'AUTH_REQUIRED');
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'dev_jwt_secret');
+    const user = await getUserById(decoded.sub);
+    if (!user) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    const tokens = signTokensForUser(user);
+    res.cookie('refreshToken', tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    return sendSuccess(res, {
+      accessToken: tokens.accessToken,
+      user: buildCompleteUserProfile(user),
+    }, 'Token refreshed successfully');
+  } catch (err) {
+    Logger.warn('auth/refresh', 'Refresh token invalid or expired', { error: err && err.message });
+    return sendError(res, 401, 'Invalid or expired refresh token', 'INVALID_TOKEN');
   }
 }));
 
