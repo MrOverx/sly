@@ -1785,6 +1785,10 @@ app.post('/friends/add', async (req, res) => {
 
     const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
 
+    // Debug: log incoming request and created record
+    Logger.debug('friends/add', 'Received friends/add', { body: req.body, userId, friendId });
+    Logger.debug('friends/add', 'Created friendRequest', { request: friendRequest });
+
     userCache.invalidate(userId);
     userCache.invalidate(friendId);
 
@@ -1792,6 +1796,7 @@ app.post('/friends/add', async (req, res) => {
 
     // Emit socket event to recipient with normalized request payload
     const recipientSocketId = userSockets.get(friendId);
+    Logger.debug('friends/add', 'Recipient socket id lookup', { friendId, recipientSocketId });
     const recipientRequestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
     recipientRequestPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
     if (recipientSocketId) {
@@ -1799,6 +1804,8 @@ app.post('/friends/add', async (req, res) => {
         ...recipientRequestPayload,
         message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
       });
+    } else {
+      Logger.debug('friends/add', 'Recipient not connected; request persisted for later delivery', { friendId, requestId: friendRequest.requestId });
     }
 
     // Build outgoing payload for sender response, so fromUser fields reflect the target recipient
