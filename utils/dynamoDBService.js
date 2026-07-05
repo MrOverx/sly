@@ -426,10 +426,12 @@ function buildUserItem(user) {
     lastLogin,
   };
 
-  // Persist an internal normalized email attribute for efficient lookups and
-  // indexing. This attribute is intentionally not exposed to clients via
-  // serialization helpers.
-  if (normalizedEmail) item.normalizedEmail = normalizedEmail;
+  // Persist email normalization fields for efficient lookups and indexing.
+  // emailLower is retained for backward compatibility with legacy records.
+  if (normalizedEmail) {
+    item.normalizedEmail = normalizedEmail;
+    item.emailLower = normalizedEmail;
+  }
 
   if (user.expiresAt) {
     const expiry = user.expiresAt instanceof Date ? Math.floor(user.expiresAt.getTime() / 1000) : Number(user.expiresAt);
@@ -954,28 +956,32 @@ async function getUserByEmail(email) {
     return normalizeDdbItem(scan.Items[0]);
   }
 
-  // Legacy fallback: some records may not have normalizedEmail populated.
-  // This scans items without normalizedEmail to support older user records.
-  let lastEvaluatedKey = null;
-  do {
-    const legacyScan = await ddb.send(new ScanCommand({
-      TableName: TABLE_NAME,
-      FilterExpression: 'attribute_not_exists(normalizedEmail)',
-      ExclusiveStartKey: lastEvaluatedKey || undefined,
-      ProjectionExpression: 'userId, email, emailLower, passwordHash',
-    }));
+  // Additional legacy fallback: some old records may only store email with
+  // case-sensitive casing and no normalized/emailLower fields. Scan for the
+  // matching email in a case-insensitive way.
+  if (normalized) {
+    let lastEvaluatedKey = null;
+    do {
+      const legacyScan = await ddb.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: 'attribute_exists(email)',
+        ExclusiveStartKey: lastEvaluatedKey || undefined,
+        ProjectionExpression: 'userId, email, emailLower, normalizedEmail, passwordHash',
+      }));
 
-    if (legacyScan.Items && legacyScan.Items.length) {
-      const legacyUser = legacyScan.Items.find((item) =>
-        item.email && String(item.email).trim().toLowerCase() === normalized,
-      );
-      if (legacyUser) {
-        return normalizeDdbItem(legacyUser);
+      if (legacyScan.Items && legacyScan.Items.length) {
+        const legacyUser = legacyScan.Items.find((item) =>
+          item.email && String(item.email).trim().toLowerCase() === normalized,
+        );
+        if (legacyUser) {
+          Logger.warn('dynamoDBService', 'Legacy email fallback matched user by case-insensitive email', { email: normalized, userId: legacyUser.userId });
+          return normalizeDdbItem(legacyUser);
+        }
       }
-    }
 
-    lastEvaluatedKey = legacyScan.LastEvaluatedKey;
-  } while (lastEvaluatedKey);
+      lastEvaluatedKey = legacyScan.LastEvaluatedKey;
+    } while (lastEvaluatedKey);
+  }
 
   return null;
 }
@@ -1259,7 +1265,7 @@ async function updateUserById(userId, updates) {
   const exprValues = {};
   const setParts = [];
 
-  // If email is being updated, also persist normalizedEmail for index lookups
+  // If email is being updated, also persist normalizedEmail and emailLower for index lookups
   if (safeUpdates.email) {
     const emailValue = safeUpdates.email ? String(safeUpdates.email).trim() : null;
     exprNames['#email'] = 'email';
@@ -1270,6 +1276,10 @@ async function updateUserById(userId, updates) {
     exprNames['#normalizedEmail'] = 'normalizedEmail';
     exprValues[':normalizedEmail'] = normalizedEmail;
     setParts.push('#normalizedEmail = :normalizedEmail');
+
+    exprNames['#emailLower'] = 'emailLower';
+    exprValues[':emailLower'] = normalizedEmail;
+    setParts.push('#emailLower = :emailLower');
   }
 
   // Map other safe updates to SET expressions. Allow null values to be written
