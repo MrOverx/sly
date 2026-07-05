@@ -1,0 +1,19 @@
+# Backend-specific ignore rules
+
+# Ignore Redmi-related files/artifacts
+*Redmi*
+*redmi*
+*REDMI*
+
+# Ignore test sources and test artifacts
+__tests__/
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
+*.test.jsx
+*.spec.jsx
+*.test.tsx
+*.spec.tsx
+
+test_output.txt
