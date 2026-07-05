@@ -1916,6 +1916,13 @@ app.get('/users/batch', async (req, res) => {
       return sendSuccess(res, { users: [] });
     }
 
+    // Protect backend from very large requests; cap to reasonable number
+    const MAX_BATCH_IDS = 100;
+    if (ids.length > MAX_BATCH_IDS) {
+      Logger.warn('users/batch', `Requested ${ids.length} ids, trimming to ${MAX_BATCH_IDS}`);
+      ids = ids.slice(0, MAX_BATCH_IDS);
+    }
+
     const users = await getUsersByIds(ids);
     return sendSuccess(res, { users: users || [] });
   } catch (err) {
