@@ -1890,6 +1890,40 @@ app.get('/users/profile', async (req, res) => {
   return handleGetUserProfile(req, res);
 });
 
+// ========== NEW: BATCH USERS ENDPOINT ==========
+// Returns multiple user profiles by comma-separated ids query or JSON body array
+app.get('/users/batch', async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  try {
+    const idsParam = Array.isArray(req.query.ids)
+      ? String(req.query.ids[0])
+      : String(req.query.ids || '').trim();
+
+    let ids = [];
+    if (idsParam) {
+      ids = idsParam.split(',').map((s) => normalizeId(s)).filter(Boolean);
+    }
+
+    // Also accept POST-like body arrays for clients that prefer JSON
+    if ((!ids || ids.length === 0) && Array.isArray(req.body?.ids)) {
+      ids = req.body.ids.map((s) => normalizeId(String(s))).filter(Boolean);
+    }
+
+    if (!ids || ids.length === 0) {
+      return sendSuccess(res, { users: [] });
+    }
+
+    const users = await getUsersByIds(ids);
+    return sendSuccess(res, { users: users || [] });
+  } catch (err) {
+    Logger.error('users/batch', 'Error fetching users by ids', err.message);
+    return sendError(res, 500, 'Error fetching users', { details: err.message });
+  }
+});
+
 // ========== NEW: SEARCH USERS ENDPOINT ==========
 app.get('/users/search', async (req, res) => {
   if (!await isDatabaseConnected()) {
