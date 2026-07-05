@@ -415,11 +415,11 @@ function buildUserSnapshot(user) {
   };
 }
 
-function buildFriendItem(userId, friendId, status = 'pending', data = {}) {
+function buildFriendItem(userId, friendId, status = 'pending') {
   const normalizedUserId = normalizeIdValue(userId);
   const normalizedRecipientId = normalizeIdValue(friendId);
 
-  const item = {
+  return {
     ...buildItemKey(FRIEND_PREFIX, normalizedUserId, `${FRIEND_PREFIX}${normalizedRecipientId}`),
     itemType: 'FRIEND',
     userId: normalizedUserId,
@@ -432,15 +432,6 @@ function buildFriendItem(userId, friendId, status = 'pending', data = {}) {
     updatedAt: new Date().toISOString(),
     friendIndexKey: `FRIEND_BY_FRIEND#${normalizedRecipientId}`,
   };
-
-  if (data.sender) {
-    item.sender = data.sender;
-  }
-  if (data.recipient) {
-    item.recipient = data.recipient;
-  }
-
-  return item;
 }
 
 function normalizeFriendRequestItem(item) {
@@ -619,6 +610,11 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
   if (!userId || !requestItem) return null;
 
   const currentUser = await getUserById(userId);
+  if (!currentUser) {
+    Logger.warn('persistFriendRequestOnUser', 'User record missing while persisting friend request reference', { userId, requestId: requestItem.requestId });
+    return null;
+  }
+
   const nextRequests = mergeFriendRequestReference(currentUser?.friendRequests, requestItem, status, userId);
   const nextFriends = status === 'accepted'
     ? mergeFriendList(currentUser?.friends || currentUser?.friendIds || [], requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)
@@ -626,41 +622,6 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
   const nextFriendIds = status === 'accepted'
     ? [...new Set([...(Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []), normalizeIdValue(requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)])]
     : (Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []);
-
-  if (!currentUser) {
-    const snapshot = buildUserSnapshot(
-      normalizeIdValue(userId) === normalizeIdValue(requestItem.userId || requestItem.senderId)
-        ? requestItem.sender
-        : requestItem.recipient
-    );
-    return upsertUser({
-      userId,
-      userName: snapshot?.userName || userId,
-      email: snapshot?.email || null,
-      authType: snapshot?.authType || 'LOCAL',
-      isGuest: snapshot?.isGuest ?? true,
-      profileComplete: false,
-      friendRequests: nextRequests,
-      pendingFriendRequests: nextRequests,
-      avatarColor: snapshot?.avatarColor,
-      avatarLetter: snapshot?.avatarLetter,
-      profileImageUrl: snapshot?.profileImageUrl,
-      profileImagePath: snapshot?.profileImagePath,
-      gender: snapshot?.gender,
-      country: snapshot?.country,
-      status: snapshot?.status,
-      friends: nextFriends,
-      friendIds: nextFriendIds,
-      bio: snapshot?.bio,
-      interests: snapshot?.interests,
-      xp: snapshot?.xp,
-      hasProfileChanged: snapshot?.hasProfileChanged,
-      isOnline: snapshot?.isOnline,
-      lastDailyXpAwardedAt: snapshot?.lastDailyXpAwardedAt,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-  }
 
   const updatedUser = await updateUserById(userId, {
     friendRequests: nextRequests,
@@ -1421,11 +1382,8 @@ async function getFriendBetween(userId, friendId) {
   return getFriendRequest(friendId, userId);
 }
 
-async function createFriendRequest(userId, friendId, senderUser = null, recipientUser = null) {
+async function createFriendRequest(userId, friendId) {
   if (!USE_DEV_STORE) await loadTableSchema();
-
-  const senderSnapshot = buildUserSnapshot(senderUser);
-  const recipientSnapshot = buildUserSnapshot(recipientUser);
 
   if (USE_DEV_STORE) {
     const items = getDevStoreFriendItems();
@@ -1434,8 +1392,8 @@ async function createFriendRequest(userId, friendId, senderUser = null, recipien
       const normalizedExisting = normalizeFriendRequestItem(existing);
       const updatedExisting = {
         ...normalizedExisting,
-        sender: senderSnapshot || normalizedExisting.sender,
-        recipient: recipientSnapshot || normalizedExisting.recipient,
+        status: 'pending',
+        updatedAt: new Date().toISOString(),
       };
       const existingIndex = items.findIndex((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
       items[existingIndex] = updatedExisting;
@@ -1447,10 +1405,7 @@ async function createFriendRequest(userId, friendId, senderUser = null, recipien
       return updatedExisting;
     }
 
-    const item = buildFriendItem(userId, friendId, 'pending', {
-      sender: senderSnapshot,
-      recipient: recipientSnapshot,
-    });
+    const item = buildFriendItem(userId, friendId, 'pending');
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
     await Promise.all([
@@ -1460,10 +1415,7 @@ async function createFriendRequest(userId, friendId, senderUser = null, recipien
     return item;
   }
 
-  const item = buildFriendItem(userId, friendId, 'pending', {
-    sender: senderSnapshot,
-    recipient: recipientSnapshot,
-  });
+  const item = buildFriendItem(userId, friendId, 'pending');
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   await Promise.all([
     persistFriendRequestOnUser(userId, item, 'pending'),
@@ -2020,14 +1972,8 @@ async function acceptFriendRequestTransaction(requestItem) {
   });
 
   // Put both friend records; allow put even if record already exists (idempotent)
-  const acceptedFriendItem1 = buildFriendItem(senderId, recipientId, 'accepted', {
-    sender: requestItem.sender || null,
-    recipient: requestItem.recipient || null,
-  });
-  const acceptedFriendItem2 = buildFriendItem(recipientId, senderId, 'accepted', {
-    sender: requestItem.recipient || null,
-    recipient: requestItem.sender || null,
-  });
+  const acceptedFriendItem1 = buildFriendItem(senderId, recipientId, 'accepted');
+  const acceptedFriendItem2 = buildFriendItem(recipientId, senderId, 'accepted');
 
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: acceptedFriendItem1 } });
   transactItems.push({ Put: { TableName: TABLE_NAME, Item: acceptedFriendItem2 } });
@@ -2121,14 +2067,8 @@ async function acceptFriendRequestTransaction(requestItem) {
       }
 
       // Upsert accepted friend records for both directions into the loaded array
-      const item1 = buildFriendItem(senderId, recipientId, 'accepted', {
-        sender: requestItem.sender || null,
-        recipient: requestItem.recipient || null,
-      });
-      const item2 = buildFriendItem(recipientId, senderId, 'accepted', {
-        sender: requestItem.recipient || null,
-        recipient: requestItem.sender || null,
-      });
+      const item1 = buildFriendItem(senderId, recipientId, 'accepted');
+      const item2 = buildFriendItem(recipientId, senderId, 'accepted');
 
       function replaceOrPush(arr, itm) {
         const existingIndex = arr.findIndex((e) => (e.PK && e.SK && itm.PK && itm.SK && String(e.PK) === String(itm.PK) && String(e.SK) === String(itm.SK)) || (e.itemType === 'FRIEND' && e.userId && e.friendId && String(e.userId) === String(itm.userId) && String(e.friendId) === String(itm.friendId)));

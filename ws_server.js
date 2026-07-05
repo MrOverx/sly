@@ -1783,7 +1783,7 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
-    const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
+    const friendRequest = await createFriendRequest(userId, friendId);
 
     // Debug: log incoming request and created record
     Logger.debug('friends/add', 'Received friends/add', { body: req.body, userId, friendId });
