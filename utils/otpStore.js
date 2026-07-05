@@ -7,6 +7,7 @@ const MAX_VERIFY_ATTEMPTS = 5;
 const OTP_SECRET = process.env.OTP_SECRET || 'omeglelol-default-otp-secret';
 
 const otpStore = new Map();
+let otpCleanupInterval = null;
 
 function normalizeEmail(email) {
   return String(email || '').toLowerCase().trim();
@@ -92,11 +93,21 @@ function cleanupExpiredOtps() {
 }
 
 function startOtpCleanup() {
-  setInterval(cleanupExpiredOtps, 60 * 1000);
+  if (otpCleanupInterval) return otpCleanupInterval;
+  otpCleanupInterval = setInterval(cleanupExpiredOtps, 60 * 1000);
+  return otpCleanupInterval;
+}
+
+function stopOtpCleanup() {
+  if (otpCleanupInterval) {
+    clearInterval(otpCleanupInterval);
+    otpCleanupInterval = null;
+  }
 }
 
 module.exports = {
   createOtpForEmail,
   verifyOtpForEmail,
   startOtpCleanup,
+  stopOtpCleanup,
 };

@@ -1,17 +1,41 @@
-const { DynamoDBClient, DescribeTableCommand } = require('@aws-sdk/client-dynamodb');
+let DynamoDBClient;
+let DescribeTableCommand;
+if (process.env.TEST_DISABLE_AWS !== 'true') {
+  try {
+    ({ DynamoDBClient, DescribeTableCommand } = require('@aws-sdk/client-dynamodb'));
+  } catch (err) {
+    console.warn('[dynamoDBService] AWS SDK for DynamoDB is unavailable:', err && err.message);
+    DynamoDBClient = null;
+    DescribeTableCommand = null;
+  }
+} else {
+  DynamoDBClient = null;
+  DescribeTableCommand = null;
+}
 const fs = require('fs');
 const path = require('path');
-const {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  UpdateCommand,
-  DeleteCommand,
-  QueryCommand,
-  ScanCommand,
-  BatchGetCommand,
-  TransactWriteCommand,
-} = require('@aws-sdk/lib-dynamodb');
+let DynamoDBDocumentClient;
+let GetCommand, PutCommand, UpdateCommand, DeleteCommand, QueryCommand, ScanCommand, BatchGetCommand, TransactWriteCommand;
+if (process.env.TEST_DISABLE_AWS !== 'true') {
+  try {
+    ({
+      DynamoDBDocumentClient,
+      GetCommand,
+      PutCommand,
+      UpdateCommand,
+      DeleteCommand,
+      QueryCommand,
+      ScanCommand,
+      BatchGetCommand,
+      TransactWriteCommand,
+    } = require('@aws-sdk/lib-dynamodb'));
+  } catch (err) {
+    console.warn('[dynamoDBService] AWS DynamoDB Document SDK is unavailable:', err && err.message);
+    DynamoDBDocumentClient = null;
+  }
+} else {
+  DynamoDBDocumentClient = null;
+}
 const { Logger } = require('./logger');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
@@ -23,7 +47,7 @@ const MAX_INLINE_PROFILE_IMAGE_URL_LENGTH = 120 * 1024; // 120KB limit for persi
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || process.env.AWS_ENDPOINT || null;
 const clientOptions = { region: AWS_REGION };
 if (DYNAMODB_ENDPOINT) clientOptions.endpoint = DYNAMODB_ENDPOINT;
-const client = new DynamoDBClient(clientOptions);
+const client = DynamoDBClient ? new DynamoDBClient(clientOptions) : null;
 
 function hasAwsCredentials() {
   return Boolean(
@@ -115,14 +139,16 @@ function saveDevStore(items) {
     return false;
   }
 }
-const ddb = DynamoDBDocumentClient.from(client, {
-  marshallOptions: {
-    removeUndefinedValues: true,
-  },
-  unmarshallOptions: {
-    convertEmptyValues: false,
-  },
-});
+const ddb = (DynamoDBDocumentClient && client)
+  ? DynamoDBDocumentClient.from(client, {
+      marshallOptions: {
+        removeUndefinedValues: true,
+      },
+      unmarshallOptions: {
+        convertEmptyValues: false,
+      },
+    })
+  : null;
 
 let TABLE_HASH_KEY = 'PK';
 let TABLE_RANGE_KEY = 'SK';
@@ -293,9 +319,33 @@ function isDisallowedUserField(field) {
 function sanitizeUserUpdates(updates = {}) {
   const sanitized = {};
   Object.entries(updates).forEach(([field, value]) => {
+    // Never allow callers to set protected or derived/internal fields
     if (isDisallowedUserField(field) || shouldPreserveProtectedField(field, value)) {
       return;
     }
+
+    // Prevent callers from explicitly setting `updatedAt` — this is managed
+    // by the persistence layer to avoid UpdateExpression conflicts.
+    if (field === 'updatedAt') return;
+
+    // Normalize Date-like values to ISO strings so DynamoDB marshalling
+    // doesn't receive raw Date instances which cause errors.
+    if (value instanceof Date) {
+      sanitized[field] = value.toISOString();
+      return;
+    }
+
+    if (typeof value === 'number' && !Number.isNaN(value)) {
+      // Treat numeric timestamps as milliseconds since epoch
+      try {
+        const iso = new Date(value).toISOString();
+        sanitized[field] = iso;
+        return;
+      } catch (e) {
+        // Fall through to assign raw value below
+      }
+    }
+
     sanitized[field] = value;
   });
   return sanitized;
@@ -444,6 +494,14 @@ function normalizeFriendRequestItem(item) {
   if (!normalized.senderId && normalized.userId) {
     normalized.senderId = normalized.userId;
   }
+
+  // Remove legacy embedded user snapshots from friend request records.
+  delete normalized.sender;
+  delete normalized.recipient;
+  delete normalized.senderUser;
+  delete normalized.recipientUser;
+  delete normalized.fromUser;
+  delete normalized.toUser;
 
   return normalized;
 }
@@ -609,9 +667,18 @@ function mergeFriendList(existingFriends = [], friendId) {
 async function persistFriendRequestOnUser(userId, requestItem, status = 'pending') {
   if (!userId || !requestItem) return null;
 
-  const currentUser = await getUserById(userId);
+  let currentUser = await getUserById(userId);
   if (!currentUser) {
-    Logger.warn('persistFriendRequestOnUser', 'User record missing while persisting friend request reference', { userId, requestId: requestItem.requestId });
+    if (USE_DEV_STORE) {
+      Logger.info('persistFriendRequestOnUser', 'User record missing; keeping friend request reference without creating placeholder profile', { userId, requestId: requestItem.requestId });
+      const nextRequests = mergeFriendRequestReference([], requestItem, status, userId);
+      const updatedUser = await updateUserById(userId, {
+        friendRequests: nextRequests,
+        pendingFriendRequests: nextRequests,
+      });
+      return updatedUser;
+    }
+
     return null;
   }
 
@@ -628,7 +695,6 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
     pendingFriendRequests: nextRequests,
     friends: nextFriends,
     friendIds: nextFriendIds,
-    updatedAt: new Date().toISOString(),
   });
 
   return updatedUser;
@@ -642,8 +708,8 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
   const requestId = normalizeIdValue(request.requestId || `${senderId}|${recipientId}`);
   const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
 
-  const sourceSender = senderUser || request.sender || null;
-  const sourceRecipient = recipientUser || request.recipient || null;
+  const sourceSender = senderUser || null;
+  const sourceRecipient = recipientUser || null;
 
   const fromUserId = isIncoming ? senderId : recipientId;
   const fromUserName = (isIncoming
@@ -665,15 +731,13 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     ? serializeFriendForClient({ ...sourceRecipient, userId: recipientId, id: recipientId, friendId: recipientId })
     : null;
 
-  return {
+  const payload = {
     requestId,
     fromUserId,
     fromUserName,
     fromUserAvatar,
     fromUserImage,
     profileImageUrl: fromUserImage,
-    sender: senderPayload,
-    recipient: recipientPayload,
     userId: senderId,
     senderId,
     recipientId,
@@ -686,6 +750,15 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     itemType: 'FRIEND',
     type: isIncoming ? 'friend_request' : 'friend_request_outgoing',
   };
+
+  if (senderPayload) {
+    payload.sender = senderPayload;
+  }
+  if (recipientPayload) {
+    payload.recipient = recipientPayload;
+  }
+
+  return payload;
 }
 
 function serializeFriendForClient(user) {
@@ -705,7 +778,6 @@ function serializeFriendForClient(user) {
     name: displayName,
     displayName: displayName,
     email: user.email || null,
-    passwordHash: user.passwordHash || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
     profileImageUrl,
@@ -1234,6 +1306,15 @@ async function updateUserById(userId, updates) {
 
 async function deleteUserById(userId) {
   if (!userId) return null;
+  if (USE_DEV_STORE) {
+    const items = loadDevStore();
+    const key = buildItemKey(USER_PREFIX, userId);
+    const filtered = items.filter((it) => !(it.PK === key));
+    saveDevStore(filtered);
+    return true;
+  }
+
+  if (!ddb) throw new Error('DynamoDB client unavailable');
   return ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: buildItemKey(USER_PREFIX, userId) }));
 }
 
@@ -1330,6 +1411,11 @@ function getDevStoreFriendItems() {
 
 function upsertDevStoreItem(item) {
   if (!USE_DEV_STORE || !item) return null;
+  // Ensure FRIEND items do not persist full user snapshots (sender/recipient)
+  if (String(item.itemType || '').toUpperCase() === 'FRIEND') {
+    if (item.sender) delete item.sender;
+    if (item.recipient) delete item.recipient;
+  }
   const items = loadDevStore();
   const isUserItem = String(item.itemType || '').toUpperCase() === 'USER';
   const key = isUserItem && item.userId ? `user:${String(item.userId)}` : (item.PK && item.SK ? `${String(item.PK)}:${String(item.SK)}` : null);

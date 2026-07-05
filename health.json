@@ -1,1 +1,0 @@
-{"success":true,"status":"healthy","timestamp":"2026-06-17T16:34:34.585Z","uptime":"507s","memory":"18.50MB","nodeVersion":"v20.20.2","environment":"development","version":"1.48.0","services":{"database":{"status":"healthy","message":"DynamoDB accessible","lastCheck":"2026-06-17T16:34:34.585Z"}}}

@@ -134,11 +134,75 @@ function normalizeFriendRequestsPayload(value) {
 
 // ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
 // Ensures backend payloads match the expected frontend user schema and aliases.
+function normalizeIdValue(value) {
+  if (value === undefined || value === null) return '';
+  try {
+    return String(value).trim().replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function normalizeFriendReference(friend) {
+  if (!friend) return null;
+  if (typeof friend === 'string' || typeof friend === 'number') {
+    return { friendId: String(friend), addedAt: null };
+  }
+  if (typeof friend === 'object') {
+    const friendId = normalizeIdValue(friend.friendId || friend.userId || friend.id || null);
+    return {
+      friendId,
+      addedAt: normalizeIsoTimestamp(friend.addedAt || friend.createdAt || friend.updatedAt || null),
+    };
+  }
+  return null;
+}
+
+function normalizeFriendReferences(friends) {
+  if (!Array.isArray(friends)) return [];
+  return friends
+    .map(normalizeFriendReference)
+    .filter((item) => item && item.friendId);
+}
+
+function normalizeFriendRequestsForClient(requests, currentUserId) {
+  const normalized = [];
+  if (!requests) return normalized;
+
+  if (Array.isArray(requests)) {
+    for (const req of requests) {
+      const serialized = serializeFriendRequestForClient(req, currentUserId);
+      if (serialized) normalized.push(serialized);
+    }
+    return normalized;
+  }
+
+  if (typeof requests === 'object') {
+    const keys = ['sent', 'received', 'incoming', 'outgoing'];
+    for (const key of keys) {
+      const group = requests[key];
+      if (Array.isArray(group)) {
+        for (const req of group) {
+          const serialized = serializeFriendRequestForClient(req, currentUserId);
+          if (serialized) normalized.push(serialized);
+        }
+      }
+    }
+  }
+
+  return normalized;
+}
+
 function buildCompleteUserProfile(user) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
   const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
   const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
+  const normalizedFriends = normalizeFriendReferences(user.friends || user.friendIds || []);
+  const normalizedFriendIds = Array.isArray(user.friendIds)
+    ? user.friendIds.map((id) => String(id))
+    : normalizedFriends.map((friend) => friend.friendId);
+
   return {
     userId: user.userId || user.id || user._id || null,
     userName: displayName,
@@ -147,6 +211,11 @@ function buildCompleteUserProfile(user) {
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImagePath,
     profileImageUrl,
+    displayImagePath: profileImagePath,
+    display_image_path: profileImagePath,
+    displayImageUrl: profileImageUrl,
+    display_image_url: profileImageUrl,
+    pictureName: user.pictureName || null,
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
     birthDate: normalizeIsoTimestamp(user.birthDate),
@@ -156,8 +225,9 @@ function buildCompleteUserProfile(user) {
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friends: Array.isArray(user.friends) ? user.friends : [],
-    friendRequests: normalizeFriendRequestsPayload(user.friendRequests),
+    friends: normalizedFriends,
+    friendIds: normalizedFriendIds,
+    friendRequests: normalizeFriendRequestsForClient(user.friendRequests, user.userId || user.id || user._id || null),
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
@@ -176,7 +246,7 @@ const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
-const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup } = require('./utils/otpStore');
+const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup, stopOtpCleanup } = require('./utils/otpStore');
 const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
 const cors = require('cors');
 const multer = require('multer');
@@ -208,7 +278,7 @@ const upload = multer({
 
 // ✅ Import enhancement middleware
 const { validateAuth, validateRegistration, validateProfileUpdate } = require('./middleware/validation');
-const { globalRateLimit, createRateLimiter, startCleanupInterval } = require('./middleware/rateLimiter');
+const { globalRateLimit, createRateLimiter, startCleanupInterval, stopCleanupInterval } = require('./middleware/rateLimiter');
 const { errorHandler, notFoundHandler, asyncHandler } = require('./middleware/errorHandler');
 
 // ✅ Import enhancement utilities
@@ -491,12 +561,8 @@ health.registerService('database', async () => {
     : { status: 'unhealthy', message: 'Unable to connect to DynamoDB' };
 });
 
-// ✅ Start health monitoring
-health.startMonitoring(60);
-
-// ✅ Start rate limit cleanup
-startCleanupInterval();
-startOtpCleanup();
+// Server startup tasks are triggered in startServer() so tests can require this module
+// without creating nonstop background intervals.
 
 // ========== DYNAMODB CONFIGURATION VALIDATION ==========
 const DYNAMODB_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || process.env.DYNAMODB_REGION;
@@ -556,7 +622,30 @@ const CONFIG = {
 };
 
 let serverStarted = false;
+let voiceSpaceCleanupInterval = null;
+let statusCleanupInterval = null;
+let rateLimitCleanupInterval = null;
+let otpCleanupInterval = null;
+let offlineMessagesCleanupInterval = null;
+let socketRateLimitCleanupInterval = null;
+let globalCleanupInterval = null;
+let statsBroadcastInterval = null;
 let isGracefulShutdown = false;
+const trackedIntervals = new Set();
+
+function trackInterval(intervalId) {
+  if (intervalId) {
+    trackedIntervals.add(intervalId);
+  }
+  return intervalId;
+}
+
+function clearTrackedInterval(intervalId) {
+  if (intervalId) {
+    try { clearInterval(intervalId); } catch (e) {}
+    trackedIntervals.delete(intervalId);
+  }
+}
 
 function startServer() {
   if (serverStarted) return;
@@ -570,7 +659,7 @@ function startServer() {
 
     // ✅ NEW: Start stale voice space cleanup timer
     const SPACE_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-    setInterval(() => {
+    voiceSpaceCleanupInterval = trackInterval(setInterval(() => {
       const now = Date.now();
       let cleanedCount = 0;
       for (const [spaceId, space] of activeVoiceSpaces.entries()) {
@@ -583,13 +672,249 @@ function startServer() {
         Logger.info('cleanup', `Removed ${cleanedCount} stale voice space(s)`, {});
         broadcastActiveSpaces();
       }
-    }, SPACE_IDLE_TIMEOUT);
+    }, SPACE_IDLE_TIMEOUT));
+
+    // ✅ Start health monitoring and background cleanup intervals after server is bound
+    if (health && typeof health.startMonitoring === 'function') {
+      try {
+        health.startMonitoring();
+        Logger.info('startup', 'Health monitoring started');
+      } catch (err) {
+        Logger.warn('startup', 'Failed to start health monitoring', { err: err && err.message });
+      }
+    }
+
+    rateLimitCleanupInterval = startCleanupInterval();
+    otpCleanupInterval = startOtpCleanup();
+    offlineMessagesCleanupInterval = startOfflineMessagesCleanup();
+    socketRateLimitCleanupInterval = startSocketRateLimitCleanup();
+    statusCleanupInterval = trackInterval(setInterval(async () => {
+      try {
+        const expirationDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const result = await clearExpiredStatuses(expirationDate.toISOString());
+        if (result > 0) {
+          Logger.info('status_cleanup', `Cleared status for ${result} users`);
+        }
+      } catch (err) {
+        Logger.error('status_cleanup', 'Failed to clean up expired statuses', err.message);
+      }
+    }, 15 * 60 * 1000)); // Check every 15 minutes
+    globalCleanupInterval = trackInterval(setInterval(() => {
+      try {
+        const now = Date.now();
+
+        // Clean video queue - with timeout notifications
+        for (let i = videoQueue.length - 1; i >= 0; i--) {
+          if (now - videoQueue[i].joinedAt > CONFIG.STALE_TIMEOUT) {
+            const stalUser = videoQueue.splice(i, 1)[0];
+            const waitedMs = now - stalUser.joinedAt;
+
+            if (io.sockets.sockets.get(stalUser.socketId)) {
+              io.to(stalUser.socketId).emit('queue_timeout', {
+                type: 'video',
+                reason: 'No partner found - waited too long',
+                waitedSeconds: Math.floor(waitedMs / 1000),
+                maxWaitSeconds: Math.floor(CONFIG.STALE_TIMEOUT / 1000),
+              });
+            }
+
+            socketQueues.delete(stalUser.socketId);
+            Logger.info('cleanup', 'Removed stale video user', {
+              socketId: stalUser.socketId,
+              waitedSeconds: Math.floor(waitedMs / 1000),
+            });
+          }
+        }
+
+        // Clean chat queue - with timeout notifications
+        for (let i = chatQueue.length - 1; i >= 0; i--) {
+          if (now - chatQueue[i].joinedAt > CONFIG.STALE_TIMEOUT) {
+            const stalUser = chatQueue.splice(i, 1)[0];
+            const waitedMs = now - stalUser.joinedAt;
+
+            if (io.sockets.sockets.get(stalUser.socketId)) {
+              io.to(stalUser.socketId).emit('queue_timeout', {
+                type: 'chat',
+                reason: 'No chat partner found - waited too long',
+                waitedSeconds: Math.floor(waitedMs / 1000),
+                maxWaitSeconds: Math.floor(CONFIG.STALE_TIMEOUT / 1000),
+              });
+            }
+
+            socketQueues.delete(stalUser.socketId);
+            Logger.info('cleanup', 'Removed stale chat user', {
+              socketId: stalUser.socketId,
+              waitedSeconds: Math.floor(waitedMs / 1000),
+            });
+          }
+        }
+
+        // Clean stale group message ID caches
+        for (const [groupName, cache] of messageIdCache.entries()) {
+          if (cache.timestamp && now - cache.timestamp > MESSAGE_CACHE_TIMEOUT) {
+            messageIdCache.delete(groupName);
+          }
+        }
+
+        try {
+          for (const [groupName, roomSet] of groupChatRooms.entries()) {
+            for (const memberSocketId of Array.from(roomSet)) {
+              if (!io.sockets.sockets.has(memberSocketId) || !socketMetadata.has(memberSocketId)) {
+                roomSet.delete(memberSocketId);
+              }
+            }
+            if (roomSet.size === 0) {
+              groupChatRooms.delete(groupName);
+              messageIdCache.delete(groupName);
+              Logger.info('cleanup', 'Removed stale empty group room during cleanup', { groupName });
+            }
+          }
+        } catch (e) {
+          Logger.warn('cleanup', 'Error cleaning stale groupChatRooms', { err: e && e.message });
+        }
+
+        try {
+          for (const [spaceId, space] of Array.from(activeVoiceSpaces.entries())) {
+            for (let i = space.participants.length - 1; i >= 0; i--) {
+              const participant = space.participants[i];
+              const participantSocketId = userSockets.get(participant.userId);
+              if (!participantSocketId || !io.sockets.sockets.has(participantSocketId) || !socketMetadata.has(participantSocketId)) {
+                space.participants.splice(i, 1);
+                userToSpaceMap.delete(participant.userId);
+                Logger.info('cleanup', `Removed offline participant ${participant.userId} from space ${spaceId}`);
+              }
+            }
+
+            const hostSocketId = userSockets.get(String(space.hostId));
+            const hostOnline = hostSocketId && io.sockets.sockets.has(hostSocketId);
+            const age = Date.now() - (space.createdAt || 0);
+            if (!hostOnline && age > CONFIG.STALE_TIMEOUT) {
+              Logger.info('cleanup', `Closing stale space ${spaceId} because host offline for ${Math.floor(age/1000)}s`);
+              try {
+                closeSpaceAsHost(spaceId, 'stale_host_offline');
+              } catch (err) {
+                Logger.warn('cleanup', `Failed to close stale space ${spaceId}`, { err: err && err.message });
+                activeVoiceSpaces.delete(spaceId);
+                broadcastActiveSpaces();
+              }
+              continue;
+            }
+
+            if (!space.participants || space.participants.length === 0) {
+              activeVoiceSpaces.delete(spaceId);
+              Logger.info('cleanup', `Deleted empty voice space ${spaceId}`);
+              io.emit('space_closed', { spaceId });
+              broadcastActiveSpaces();
+            } else {
+              emitSpaceUpdated(space);
+            }
+          }
+        } catch (e) {
+          Logger.warn('cleanup', 'Error cleaning stale voice spaces', { err: e && e.message });
+        }
+
+        broadcastStats();
+      } catch (error) {
+        Logger.error('cleanup', 'Error during cleanup', error.message);
+      }
+    }, CONFIG.CLEANUP_INTERVAL));
+    statsBroadcastInterval = trackInterval(setInterval(() => {
+      try {
+        broadcastStats();
+      } catch (err) {
+        Logger.error('periodicBroadcast', 'Error broadcasting stats', err.message);
+      }
+    }, 5000));
   });
 }
 
-// Start server immediately; DynamoDB is accessible via AWS SDK configuration.
-startServer();
+// Start server only when this module is run directly. Tests should call
+// `startServer()` explicitly so they can control lifecycle and ports.
+if (require.main === module) {
+  startServer();
+}
 
+async function stopServer() {
+  try {
+    if (io && typeof io.close === 'function') {
+      await new Promise((resolve) => {
+        try {
+          io.close(() => resolve());
+        } catch (e) {
+          resolve();
+        }
+      });
+    }
+
+    if (server && typeof server.close === 'function') {
+      await new Promise((resolve) => {
+        try {
+          server.close(() => resolve());
+        } catch (e) {
+          resolve();
+        }
+      });
+    }
+
+    if (voiceSpaceCleanupInterval) {
+      clearTrackedInterval(voiceSpaceCleanupInterval);
+      voiceSpaceCleanupInterval = null;
+    }
+    if (health && typeof health.stopMonitoring === 'function') {
+      try { health.stopMonitoring(); } catch (e) { /* ignore */ }
+    }
+    if (statusCleanupInterval) {
+      clearTrackedInterval(statusCleanupInterval);
+      statusCleanupInterval = null;
+    }
+    if (rateLimitCleanupInterval) {
+      clearTrackedInterval(rateLimitCleanupInterval);
+      rateLimitCleanupInterval = null;
+    }
+    if (otpCleanupInterval) {
+      clearTrackedInterval(otpCleanupInterval);
+      otpCleanupInterval = null;
+    }
+    if (offlineMessagesCleanupInterval) {
+      clearTrackedInterval(offlineMessagesCleanupInterval);
+      offlineMessagesCleanupInterval = null;
+    }
+    if (socketRateLimitCleanupInterval) {
+      clearTrackedInterval(socketRateLimitCleanupInterval);
+      socketRateLimitCleanupInterval = null;
+    }
+    if (globalCleanupInterval) {
+      clearTrackedInterval(globalCleanupInterval);
+      globalCleanupInterval = null;
+    }
+    if (statsBroadcastInterval) {
+      clearTrackedInterval(statsBroadcastInterval);
+      statsBroadcastInterval = null;
+    }
+    stopCleanupInterval();
+    stopOtpCleanup();
+    for (const intervalId of Array.from(trackedIntervals)) {
+      clearTrackedInterval(intervalId);
+    }
+
+    if (pendingVoiceSpaceDisconnects && pendingVoiceSpaceDisconnects.size > 0) {
+      for (const timeoutId of pendingVoiceSpaceDisconnects.values()) {
+        try { clearTimeout(timeoutId); } catch (e) { /* ignore */ }
+      }
+      pendingVoiceSpaceDisconnects.clear();
+    }
+  } finally {
+    serverStarted = false;
+  }
+}
+
+function getPort() {
+  try {
+    const addr = server && server.address && server.address();
+    if (addr && typeof addr.port === 'number' && addr.port > 0) return addr.port;
+  } catch (e) {}
+  return CONFIG.PORT;
+}
 
 // ✅ OPTIMIZED: Socket.IO Configuration for deployment compatibility
 const io = socketIO(server, {
@@ -711,57 +1036,6 @@ function emitSpaceUpdated(space) {
   } catch (err) {
     Logger.warn('emitSpaceUpdated', 'Could not inspect room membership', err && err.message);
   }
-}
-
-// Periodic task to clean up old statuses
-setInterval(async () => {
-  try {
-    const expirationDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const result = await clearExpiredStatuses(expirationDate.toISOString());
-  if (result > 0) {
-    Logger.info('status_cleanup', `Cleared status for ${result} users`);
-  }
-  } catch (err) {
-    Logger.error('status_cleanup', 'Failed to clean up expired statuses', err.message);
-  }
-}, 15 * 60 * 1000); // Check every 15 minutes
-
-// Helper to add timeout to async operations (prevents hanging requests)
-function withTimeout(promise, timeoutMs = 5000) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Operation timeout after ${timeoutMs}ms`)), timeoutMs)
-    ),
-  ]).catch(err => {
-    Logger.warn('withTimeout', 'Promise timed out or failed', { error: err.message, timeoutMs });
-    return null;
-  });
-}
-
-async function resolveUserProfileMetadata(userId, userMeta = {}, fallbackName = 'Guest', defaultColor = '#128C7E', defaultInitial = 'U') {
-  const freshProfile = await withTimeout(getFreshUserProfile(userId), 5000);
-  const userName = freshProfile?.userName || userMeta.userName || fallbackName;
-  const avatarLetter = freshProfile?.userName ? freshProfile.userName.charAt(0).toUpperCase() : (userMeta.avatarLetter || defaultInitial);
-  const avatarColor = freshProfile?.avatarColor || userMeta.avatarColor || defaultColor;
-
-  const freshProfileImageUrl = getSafeProfileImageReference(freshProfile?.profileImageUrl);
-  const freshProfileImagePath = getSafeProfileImageReference(freshProfile?.profileImagePath);
-  const freshProfileHasImage = !!freshProfileImageUrl || !!freshProfileImagePath;
-
-  const profileImageUrl = freshProfileHasImage
-    ? (freshProfileImageUrl || freshProfileImagePath || null)
-    : (freshProfile
-      ? null
-      : (userMeta.profileImageUrl || getSafeProfileImageReference(userMeta.profileImagePath) || null));
-
-  const profileImagePath = freshProfileHasImage
-    ? (freshProfileImagePath || freshProfileImageUrl || null)
-    : (freshProfile
-      ? null
-      : getSafeProfileImageReference(userMeta.profileImagePath || userMeta.profileImageUrl || null));
-
-  return { userName, avatarLetter, avatarColor, profileImageUrl, profileImagePath };
 }
 
 function getSafeProfileImageReference(value) {
@@ -1771,6 +2045,20 @@ app.post('/friends/add', async (req, res) => {
     }
 
     // Get sender and recipient user data for socket event display only
+    // Sanitize incoming request body to prevent client-supplied user snapshots
+    // from being persisted or used by the backend.
+    try {
+      const forbidden = ['sender', 'recipient', 'senderUser', 'recipientUser', 'fromUser', 'toUser'];
+      for (const key of forbidden) {
+        if (Object.prototype.hasOwnProperty.call(req.body, key)) {
+          delete req.body[key];
+          Logger.debug('friends/add', `Stripped client-supplied field from request body: ${key}`);
+        }
+      }
+    } catch (e) {
+      Logger.warn('friends/add', 'Failed to sanitize request body', e && e.message);
+    }
+
     let senderUser = userCache.get(userId);
     if (!senderUser) {
       senderUser = await getUserById(userId);
@@ -2976,7 +3264,7 @@ const OFFLINE_MESSAGE_TTL_MS = (Number(process.env.OFFLINE_MESSAGE_TTL_DAYS) || 
 
 // Periodic cleanup for offlineMessages to avoid unbounded memory growth
 function startOfflineMessagesCleanup() {
-  setInterval(() => {
+  return setInterval(() => {
     try {
       const now = Date.now();
       let removedCount = 0;
@@ -2999,7 +3287,7 @@ function startOfflineMessagesCleanup() {
 }
 
 function startSocketRateLimitCleanup() {
-  setInterval(() => {
+  return setInterval(() => {
     try {
       const now = Date.now();
       let removedCount = 0;
@@ -3018,8 +3306,8 @@ function startSocketRateLimitCleanup() {
   }, 5 * 60 * 1000); // run every 5 minutes
 }
 
-startOfflineMessagesCleanup();
-startSocketRateLimitCleanup();
+// Background cleanup intervals are started inside startServer() so tests can require this module
+// without creating nonstop timers.
 // Star gifting state: counts per room or match and one-time gift tracking
 const starCounts = new Map(); // key -> number (roomId or matchId)
 const oneTimeGifts = new Set(); // `${socketId}:${key}` to prevent duplicate gifts
@@ -6102,143 +6390,7 @@ io.on('connection', (socket) => {
 
 }); // Close io.on('connection')
 
-// ========== CLEANUP & MAINTENANCE ==========
-setInterval(() => {
-  try {
-    const now = Date.now();
-
-    // Clean video queue - with timeout notifications
-    for (let i = videoQueue.length - 1; i >= 0; i--) {
-      if (now - videoQueue[i].joinedAt > CONFIG.STALE_TIMEOUT) {
-        const stalUser = videoQueue.splice(i, 1)[0];
-        const waitedMs = now - stalUser.joinedAt;
-        
-        // Notify user of timeout
-        if (io.sockets.sockets.get(stalUser.socketId)) {
-          io.to(stalUser.socketId).emit('queue_timeout', {
-            type: 'video',
-            reason: 'No partner found - waited too long',
-            waitedSeconds: Math.floor(waitedMs / 1000),
-            maxWaitSeconds: Math.floor(CONFIG.STALE_TIMEOUT / 1000),
-          });
-        }
-        
-        socketQueues.delete(stalUser.socketId);
-        Logger.info('cleanup', 'Removed stale video user', {
-          socketId: stalUser.socketId,
-          waitedSeconds: Math.floor(waitedMs / 1000),
-        });
-      }
-    }
-
-    // Clean chat queue - with timeout notifications
-    for (let i = chatQueue.length - 1; i >= 0; i--) {
-      if (now - chatQueue[i].joinedAt > CONFIG.STALE_TIMEOUT) {
-        const stalUser = chatQueue.splice(i, 1)[0];
-        const waitedMs = now - stalUser.joinedAt;
-        
-        // Notify user of timeout
-        if (io.sockets.sockets.get(stalUser.socketId)) {
-          io.to(stalUser.socketId).emit('queue_timeout', {
-            type: 'chat',
-            reason: 'No chat partner found - waited too long',
-            waitedSeconds: Math.floor(waitedMs / 1000),
-            maxWaitSeconds: Math.floor(CONFIG.STALE_TIMEOUT / 1000),
-          });
-        }
-        
-        socketQueues.delete(stalUser.socketId);
-        Logger.info('cleanup', 'Removed stale chat user', {
-          socketId: stalUser.socketId,
-          waitedSeconds: Math.floor(waitedMs / 1000),
-        });
-      }
-    }
-
-    // Clean stale group message ID caches
-    for (const [groupName, cache] of messageIdCache.entries()) {
-      if (cache.timestamp && now - cache.timestamp > MESSAGE_CACHE_TIMEOUT) {
-        messageIdCache.delete(groupName);
-      }
-    }
-    // ✅ FIX: Clean stale groupChatRooms entries (remove dead sockets and delete empty rooms)
-    try {
-      for (const [groupName, roomSet] of groupChatRooms.entries()) {
-        for (const memberSocketId of Array.from(roomSet)) {
-          // If socket no longer exists in Socket.IO or no metadata, remove it
-          if (!io.sockets.sockets.has(memberSocketId) || !socketMetadata.has(memberSocketId)) {
-            roomSet.delete(memberSocketId);
-          }
-        }
-        if (roomSet.size === 0) {
-          groupChatRooms.delete(groupName);
-          messageIdCache.delete(groupName);
-          Logger.info('cleanup', 'Removed stale empty group room during cleanup', { groupName });
-        }
-      }
-    } catch (e) {
-      Logger.warn('cleanup', 'Error cleaning stale groupChatRooms', { err: e && e.message });
-    }
-    // ✅ NEW: Clean stale voice spaces
-    try {
-      for (const [spaceId, space] of Array.from(activeVoiceSpaces.entries())) {
-        // Remove participants whose sockets are gone
-        for (let i = space.participants.length - 1; i >= 0; i--) {
-          const participant = space.participants[i];
-          const participantSocketId = userSockets.get(participant.userId);
-          if (!participantSocketId || !io.sockets.sockets.has(participantSocketId) || !socketMetadata.has(participantSocketId)) {
-            space.participants.splice(i, 1);
-            userToSpaceMap.delete(participant.userId);
-            Logger.info('cleanup', `Removed offline participant ${participant.userId} from space ${spaceId}`);
-          }
-        }
-
-        // If host is offline (no socket) or host socket not present, and space is older than STALE_TIMEOUT, close it
-        const hostSocketId = userSockets.get(String(space.hostId));
-        const hostOnline = hostSocketId && io.sockets.sockets.has(hostSocketId);
-        const age = Date.now() - (space.createdAt || 0);
-        if (!hostOnline && age > CONFIG.STALE_TIMEOUT) {
-          Logger.info('cleanup', `Closing stale space ${spaceId} because host offline for ${Math.floor(age/1000)}s`);
-          try {
-            closeSpaceAsHost(spaceId, 'stale_host_offline');
-          } catch (err) {
-            Logger.warn('cleanup', `Failed to close stale space ${spaceId}`, { err: err && err.message });
-            // Fallback: remove space
-            activeVoiceSpaces.delete(spaceId);
-            broadcastActiveSpaces();
-          }
-          continue;
-        }
-
-        // If space has no participants left, delete it
-        if (!space.participants || space.participants.length === 0) {
-          activeVoiceSpaces.delete(spaceId);
-          Logger.info('cleanup', `Deleted empty voice space ${spaceId}`);
-          io.emit('space_closed', { spaceId });
-          broadcastActiveSpaces();
-        } else {
-          // Emit update to ensure participant counts stay current
-          emitSpaceUpdated(space);
-        }
-      }
-    } catch (e) {
-      Logger.warn('cleanup', 'Error cleaning stale voice spaces', { err: e && e.message });
-    }
-    
-    broadcastStats();
-  } catch (error) {
-    Logger.error('cleanup', 'Error during cleanup', error.message);
-  }
-}, CONFIG.CLEANUP_INTERVAL);
-
-// ✅ NEW: Periodic online count broadcast (every 5 seconds) - ensures clients always have current count
-setInterval(() => {
-  try {
-    broadcastStats();
-  } catch (err) {
-    Logger.error('periodicBroadcast', 'Error broadcasting stats', err.message);
-  }
-}, 5000);
+// Cleanup and maintenance intervals are created inside startServer() so they can be stopped cleanly.
 
 // ✅ Register 404 and error handlers (MUST be LAST)
 app.use(notFoundHandler);
@@ -6354,3 +6506,5 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   Logger.error('unhandledRejection', 'Unhandled rejection', String(reason));
 });
+
+module.exports = { startServer, stopServer, getPort };

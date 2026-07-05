@@ -14,6 +14,7 @@ const { sendError } = require('../utils/responseHandler');
 // Store for tracking request counts
 // Format: { key: { count, resetTime } }
 const requestLimits = new Map();
+let cleanupInterval = null;
 
 /**
  * Global rate limiter - 100 requests per minute per IP
@@ -111,7 +112,9 @@ function createRateLimiter(name, maxRequests, windowSizeSeconds = 1800) {
  * Call this once on server startup
  */
 function startCleanupInterval() {
-  setInterval(() => {
+  if (cleanupInterval) return cleanupInterval;
+
+  cleanupInterval = setInterval(() => {
     const now = Date.now();
     const maxAge = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -124,11 +127,21 @@ function startCleanupInterval() {
     const size = requestLimits.size;
     Logger.debug('rateLimit', `Cleaned up expired records. Current size: ${size}`);
   }, 15 * 60 * 1000); // Run every 15 minutes
+
+  return cleanupInterval;
+}
+
+function stopCleanupInterval() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
 }
 
 module.exports = {
   globalRateLimit,
   createRateLimiter,
   startCleanupInterval,
+  stopCleanupInterval,
   // Admin: get/reset functions removed — not referenced in codebase
 };

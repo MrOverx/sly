@@ -7,10 +7,17 @@ let DeleteObjectCommand;
 let GetObjectCommand;
 let getSignedUrl;
 
-try {
-  ({ S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3'));
-} catch (error) {
-  console.warn('[s3Service] AWS S3 client SDK is unavailable:', error?.message || error);
+if (process.env.TEST_DISABLE_AWS !== 'true') {
+  try {
+    ({ S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3'));
+  } catch (error) {
+    console.warn('[s3Service] AWS S3 client SDK is unavailable:', error?.message || error);
+  }
+} else {
+  S3Client = null;
+  PutObjectCommand = null;
+  DeleteObjectCommand = null;
+  GetObjectCommand = null;
 }
 
 function getSignedUrlResolver() {
@@ -19,6 +26,7 @@ function getSignedUrlResolver() {
   }
 
   try {
+    if (process.env.TEST_DISABLE_AWS === 'true') return null;
     ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
     return getSignedUrl;
   } catch (error) {
