@@ -2045,6 +2045,27 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
       });
     }
 
+    // Notify both parties to refresh pending request lists
+    try {
+      const senderSocketId = userSockets.get(friendRequest.userId);
+      if (senderSocketId && io && typeof io.to === 'function') {
+        io.to(senderSocketId).emit('pending_requests_updated', {
+          forUserId: friendRequest.userId,
+          reason: 'request_canceled',
+          requestId,
+        });
+      }
+      if (recipientSocketId && io && typeof io.to === 'function') {
+        io.to(recipientSocketId).emit('pending_requests_updated', {
+          forUserId: friendRequest.friendId,
+          reason: 'request_canceled',
+          requestId,
+        });
+      }
+    } catch (e) {
+      Logger.warn('friends/request/cancel', 'Failed to emit pending_requests_updated', e && e.message);
+    }
+
     // ✅ Get and return the updated current user to preserve all profile fields
     let updatedCurrentUser = userCache.get(userId);
     if (!updatedCurrentUser) {
@@ -2132,18 +2153,24 @@ app.post('/friends/add', async (req, res) => {
 
     Logger.info('friends/add', 'Friend request created', { userId, friendId, requestId: friendRequest.requestId });
 
-    // Emit socket event to recipient with normalized request payload
+    // NOTE: We intentionally DO NOT emit a real-time 'friend_request_received' socket
+    // event here. The frontend loads pending requests via the requests endpoints
+    // and the Notifications UI provides accept/deny. Persisted request is available
+    // for the recipient when they next sync or fetch pending requests.
     const recipientSocketId = userSockets.get(friendId);
-    Logger.debug('friends/add', 'Recipient socket id lookup', { friendId, recipientSocketId });
-    const recipientRequestPayload = buildFriendRequestPayload(friendRequest, friendId, senderUser, recipientUser);
-    recipientRequestPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('friend_request_received', {
-        ...recipientRequestPayload,
-        message: `${senderUser?.userName || 'Someone'} sent you a friend request`,
-      });
-    } else {
-      Logger.debug('friends/add', 'Recipient not connected; request persisted for later delivery', { friendId, requestId: friendRequest.requestId });
+    Logger.debug('friends/add', 'Recipient socket id lookup (no realtime emit)', { friendId, recipientSocketId });
+
+    // Notify recipient to refresh their pending requests list in real-time if connected
+    try {
+      if (recipientSocketId && io && typeof io.to === 'function') {
+        io.to(recipientSocketId).emit('pending_requests_updated', {
+          forUserId: friendId,
+          reason: 'new_request',
+          requestId: friendRequest.requestId,
+        });
+      }
+    } catch (e) {
+      Logger.warn('friends/add', 'Failed to emit pending_requests_updated', e && e.message);
     }
 
     // Build outgoing payload for sender response, so fromUser fields reflect the target recipient
@@ -2253,6 +2280,26 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       });
     }
 
+    // Emit pending_requests_updated to the sender to refresh their pending/outgoing lists
+    try {
+      if (senderSocketId && io && typeof io.to === 'function') {
+        io.to(senderSocketId).emit('pending_requests_updated', {
+          forUserId: friendRequest.userId,
+          reason: 'request_accepted',
+          requestId,
+        });
+      }
+      if (recipientSocketId && io && typeof io.to === 'function') {
+        io.to(recipientSocketId).emit('pending_requests_updated', {
+          forUserId: userId,
+          reason: 'request_accepted',
+          requestId,
+        });
+      }
+    } catch (e) {
+      Logger.warn('friends/request/accept', 'Failed to emit pending_requests_updated', e && e.message);
+    }
+
     // Notify the recipient about the new friend relationship if connected
     const recipientSocketId = userSockets.get(userId);
     const recipientNewFriendPayload = buildCompleteUserProfile(senderUser);
@@ -2358,6 +2405,27 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
 
     Logger.info('friends/request/deny', 'Friend request denied', { userId, requestId });
 
+    // Notify sender and recipient to refresh pending lists
+    try {
+      const senderSocketId = userSockets.get(friendRequest.userId);
+      const recipientSocketId = userSockets.get(friendRequest.friendId);
+      if (senderSocketId && io && typeof io.to === 'function') {
+        io.to(senderSocketId).emit('pending_requests_updated', {
+          forUserId: friendRequest.userId,
+          reason: 'request_denied',
+          requestId,
+        });
+      }
+      if (recipientSocketId && io && typeof io.to === 'function') {
+        io.to(recipientSocketId).emit('pending_requests_updated', {
+          forUserId: friendRequest.friendId,
+          reason: 'request_denied',
+          requestId,
+        });
+      }
+    } catch (e) {
+      Logger.warn('friends/request/deny', 'Failed to emit pending_requests_updated', e && e.message);
+    }
     // Get updated user data
     let senderUser = userCache.get(friendRequest.userId);
     if (!senderUser) {

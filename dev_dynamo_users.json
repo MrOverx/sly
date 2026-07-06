@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "PK": "FRIEND#sm_sender_auto",
+    "SK": "FRIEND#sm_recipient_auto",
+    "itemType": "FRIEND",
+    "userId": "sm_sender_auto",
+    "senderId": "sm_sender_auto",
+    "friendId": "sm_recipient_auto",
+    "recipientId": "sm_recipient_auto",
+    "requestId": "sm_sender_auto|sm_recipient_auto",
+    "status": "pending",
+    "createdAt": "2026-07-06T15:12:51.562Z",
+    "updatedAt": "2026-07-06T15:12:51.562Z",
+    "friendIndexKey": "FRIEND_BY_FRIEND#sm_recipient_auto"
+  }
+]
