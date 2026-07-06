@@ -1230,22 +1230,33 @@ async function updateUserById(userId, updates) {
     const items = loadDevStore();
     if (safeUpdates.email) {
       const normalizedEmail = normalizeEmail(safeUpdates.email);
-      const existingByEmail = items.find((u) => u.email && String(u.email).trim().toLowerCase() === normalizedEmail && String(u.userId) !== String(userId));
+      const existingByEmail = items.find((u) => u.itemType === 'USER' && u.email && String(u.email).trim().toLowerCase() === normalizedEmail && String(u.userId) !== String(userId));
       if (existingByEmail) throw new Error('EMAIL_CONFLICT');
     }
 
-    const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const merged = { ...current, ...safeUpdates, updatedAt: now };
+
     if (safeUpdates.email) {
-      const emailValue = String(safeUpdates.email).trim();
+      const emailValue = safeUpdates.email ? String(safeUpdates.email).trim() : null;
       merged.email = emailValue;
+      merged.normalizedEmail = normalizeEmail(emailValue);
+      merged.emailLower = merged.normalizedEmail;
     }
 
-    const item = buildUserItem(merged);
-    if (!TABLE_HAS_SORT_KEY) delete item.SK;
+    // Preserve any existing custom or legacy fields on the USER record when
+    // updating the JSON dev store. Avoid rebuilding the item schema from scratch
+    // because that can drop fields like notifications, pendingIncomingRequests,
+    // pendingOutgoingRequests, or other derived data.
+    merged.userId = String(userId);
+    merged.itemType = 'USER';
+    merged.PK = current.PK || buildItemKey(USER_PREFIX, userId).PK;
+    if (TABLE_HAS_SORT_KEY) merged.SK = current.SK || METADATA_SK;
+
     const filtered = items.filter((u) => !(u.itemType === 'USER' && String(u.userId) === String(userId)));
-    filtered.push(item);
+    filtered.push(merged);
     saveDevStore(filtered);
-    return normalizeDdbItem(item);
+    return normalizeDdbItem(merged);
   }
 
   if (safeUpdates.email) {

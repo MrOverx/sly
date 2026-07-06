@@ -2280,6 +2280,8 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       });
     }
 
+    const recipientSocketId = userSockets.get(userId);
+
     // Emit pending_requests_updated to the sender to refresh their pending/outgoing lists
     try {
       if (senderSocketId && io && typeof io.to === 'function') {
@@ -2301,7 +2303,6 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     }
 
     // Notify the recipient about the new friend relationship if connected
-    const recipientSocketId = userSockets.get(userId);
     const recipientNewFriendPayload = buildCompleteUserProfile(senderUser);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_added', {
