@@ -228,6 +228,15 @@ function buildCompleteUserProfile(user) {
     friends: normalizedFriends,
     friendIds: normalizedFriendIds,
     friendRequests: normalizeFriendRequestsForClient(user.friendRequests, user.userId || user.id || user._id || null),
+    pendingFriendRequests: normalizeFriendRequestsForClient(user.pendingFriendRequests, user.userId || user.id || user._id || null),
+    pendingIncomingRequests: normalizeFriendRequestsForClient(
+      user.pendingFriendRequests?.incoming || user.pendingIncomingRequests,
+      user.userId || user.id || user._id || null,
+    ),
+    pendingOutgoingRequests: normalizeFriendRequestsForClient(
+      user.pendingFriendRequests?.outgoing || user.pendingOutgoingRequests,
+      user.userId || user.id || user._id || null,
+    ),
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
