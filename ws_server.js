@@ -156,10 +156,18 @@ function buildCompleteUserProfile(user, currentUserId = null) {
     ? rawRequests.map((r) => serializeFriendRequestForClient(r, currentId)).filter(Boolean)
     : [];
 
+  const normalizedEmail = user.email ? String(user.email).trim().toLowerCase() : null;
+  const emailVerified = user.emailVerified === true;
+  const emailVerifiedAt = normalizeIsoTimestamp(user.emailVerifiedAt);
+
   return {
+    itemType: 'USER',
     userId: user.userId || user.id || user._id || null,
     userName: displayName,
     email: user.email || null,
+    normalizedEmail,
+    emailVerified,
+    emailVerifiedAt,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
     profileImagePath,
@@ -174,6 +182,7 @@ function buildCompleteUserProfile(user, currentUserId = null) {
     birthDate: normalizeIsoTimestamp(user.birthDate),
     country: user.country || null,
     status: user.status || null,
+    statusUpdatedAt: normalizeIsoTimestamp(user.statusUpdatedAt),
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
@@ -187,6 +196,7 @@ function buildCompleteUserProfile(user, currentUserId = null) {
     isFriend: user.isFriend === true,
     lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
     friendRequests: serializedRequests,
+    pendingFriendRequests: serializedRequests.filter((req) => String(req.status || '').toLowerCase() === 'pending'),
     profileComplete: user.profileComplete === true,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
@@ -1648,30 +1658,12 @@ app.get('/auth/check-email', asyncHandler(async (req, res) => {
     const existingUser = await getUserByEmail(normalizedEmail);
 
     if (existingUser) {
-      // ✅ EMAIL EXISTS - Return user profile for direct home navigation
+      // ✅ EMAIL EXISTS - Return normalized frontend user profile
       Logger.info('auth/check-email', '✅ Email found in database', { email: normalizedEmail, userId: existingUser.userId });
 
       return sendSuccess(res, {
         exists: true,
-        user: {
-          userId: existingUser.userId,
-          userName: existingUser.userName,
-          email: existingUser.email,
-          authType: existingUser.authType,
-          isGuest: existingUser.isGuest || false,
-          gender: existingUser.gender || 'other',
-          country: existingUser.country || null,
-          status: existingUser.status || null,
-          bio: existingUser.bio || null,
-          interests: Array.isArray(existingUser.interests) ? existingUser.interests : [],
-          birthDate: existingUser.birthDate || null,
-          avatarColor: existingUser.avatarColor || '#128C7E',
-          profileImageUrl: existingUser.profileImageUrl || null,
-          profileComplete: existingUser.profileComplete === true, // ✅ Critical flag for profile check
-          xp: getUserXp(existingUser),
-          createdAt: existingUser.createdAt,
-          lastLogin: existingUser.lastLogin,
-        }
+        user: buildCompleteUserProfile(existingUser),
       }, 'Email found - returning user');
     } else {
       // ✅ EMAIL NOT FOUND - New user, should proceed to profile creation
@@ -1989,7 +1981,7 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
       success: true,
       message: 'Friend request canceled',
       request: canceledPayload,
-      currentUser: updatedCurrentUser || senderUser,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId),
     });
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
@@ -2097,7 +2089,8 @@ app.post('/friends/add', async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser),
+      request: senderResponsePayload,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId),
     });
   } catch (err) {
     Logger.error('friends/add', 'Error sending friend request', err.message);
@@ -2267,6 +2260,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
+      request: acceptedPayload,
       currentUser: buildCompleteUserProfile(updatedCurrentUser, userId) || buildCompleteUserProfile(recipientUser, userId),
       newFriend: recipientNewFriendPayload || senderNewFriendPayload,
       updatedFriendsList,
@@ -2370,7 +2364,8 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
-      currentUser: updatedCurrentUser || recipientUser,
+      request: deniedPayload,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || recipientUser, userId),
     });
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
@@ -2436,7 +2431,7 @@ app.post('/friends/remove', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend removed successfully',
-      currentUser: updatedCurrentUser,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId),
     });
   } catch (err) {
     Logger.error('friends/remove', 'Error removing friend', err.message);

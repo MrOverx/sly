@@ -772,17 +772,27 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
 
   // Add new compatible friend-request payload fields
   payload.RequestType = isIncoming ? 'FRIEND_REQUEST_INCOMING' : 'FRIEND_REQUEST_OUTGOING';
+  payload.requestType = payload.RequestType;
   payload.ReceiverIdUserId = recipientId;
   payload.isRead = request.isRead === true || request.isRead === 'true' || false;
 
   // Provide a small `To` object with sender summary for client convenience
-  const toObj = (sourceSender || sourceRecipient) ? (sourceSender || sourceRecipient) : null;
+  const toObj = sourceSender || sourceRecipient || null;
+  const toUserId = isIncoming ? senderId : recipientId;
+  const toUserName = toObj ? (toObj.userName || toObj.name || toUserId) : (fromUserName || toUserId);
+  const toAvatarColor = toObj ? (toObj.avatarColor || '#128C7E') : (fromUserAvatar || '#128C7E');
+  const toAvatarLetter = toObj
+    ? (toObj.avatarLetter || (toObj.userName ? String(toObj.userName).charAt(0).toUpperCase() : String(toUserId).charAt(0).toUpperCase()))
+    : String(fromUserName || toUserId).charAt(0).toUpperCase();
+  const toProfileImage = toObj ? (toObj.profileImageUrl || toObj.profileImagePath || null) : fromUserImage || null;
+
   payload.To = {
+    userId: toUserId,
     SenderUserId: senderId,
-    userName: toObj ? (toObj.userName || toObj.name || senderId) : (fromUserName || senderId),
-    avatarColor: toObj ? (toObj.avatarColor || '#128C7E') : (fromUserAvatar || '#128C7E'),
-    avatarLetter: toObj ? (toObj.avatarLetter || (toObj.userName ? String(toObj.userName).charAt(0).toUpperCase() : String(senderId).charAt(0).toUpperCase())) : (String(fromUserName || senderId).charAt(0).toUpperCase()),
-    profileImageUrl: toObj ? (toObj.profileImageUrl || toObj.profileImagePath || null) : fromUserImage || null,
+    userName: toUserName,
+    avatarColor: toAvatarColor,
+    avatarLetter: toAvatarLetter,
+    profileImageUrl: toProfileImage,
   };
 
   if (senderPayload) {
