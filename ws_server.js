@@ -2176,7 +2176,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     const senderSocketId = userSockets.get(friendRequest.userId);
     const acceptedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
     acceptedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
-    const senderNewFriendPayload = buildCompleteUserProfile(recipientUser);
+    const senderNewFriendPayload = buildCompleteUserProfile(recipientUser, friendRequest.userId);
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
         ...acceptedPayload,
@@ -2213,7 +2213,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     }
 
     // Notify the recipient about the new friend relationship if connected
-    const recipientNewFriendPayload = buildCompleteUserProfile(senderUser);
+    const recipientNewFriendPayload = buildCompleteUserProfile(senderUser, userId);
     if (recipientSocketId) {
       io.to(recipientSocketId).emit('friend_added', {
         newFriend: recipientNewFriendPayload,
@@ -2267,7 +2267,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
-      currentUser: updatedCurrentUser || recipientUser,
+      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId) || buildCompleteUserProfile(recipientUser, userId),
       newFriend: recipientNewFriendPayload || senderNewFriendPayload,
       updatedFriendsList,
     });

@@ -2124,7 +2124,7 @@ async function acceptFriendRequestTransaction(requestItem) {
     Update: {
       TableName: TABLE_NAME,
       Key: senderUserKey,
-      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), friends = list_append(if_not_exists(friends, :emptyList), :friendRef), updatedAt = :now',
+      UpdateExpression: 'SET friendIds = list_append(if_not_exists(friendIds, :emptyList), :toAdd), friends = list_append(if_not_exists(friends, :emptyList), :friendRef), notifications = list_append(if_not_exists(notifications, :notifEmpty), :notifToAdd), updatedAt = :now',
       ConditionExpression: 'attribute_not_exists(friendIds) OR NOT contains(friendIds, :friendId)',
       ExpressionAttributeValues: {
         ':emptyList': [],
@@ -2132,6 +2132,8 @@ async function acceptFriendRequestTransaction(requestItem) {
         ':friendRef': [{ friendId: recipientId, addedAt: friendRefNow }],
         ':friendId': recipientId,
         ':now': new Date().toISOString(),
+        ':notifEmpty': [],
+        ':notifToAdd': [],
       },
     }
   });
@@ -2166,19 +2168,16 @@ async function acceptFriendRequestTransaction(requestItem) {
       activity: `${recipientId} accepted your friend request`,
       createdAt: now,
     };
-
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: senderUserKey,
-        UpdateExpression: 'SET notifications = list_append(if_not_exists(notifications, :emptyList), :toAdd), updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':emptyList': [],
-          ':toAdd': [notificationForSender],
-          ':now': now,
-        },
-      }
-    });
+    // Attach notification to the pre-existing sender update by filling the
+    // previously reserved ':notifToAdd' value. This avoids creating a second
+    // Update operation on the same user item in the TransactWrite (DynamoDB
+    // disallows multiple operations on the same item within a single
+    // transaction). If the sender update is already present in transactItems
+    // (it is), find it and set the notif value accordingly.
+    const senderUpdate = transactItems.find((ti) => ti.Update && ti.Update.Key && ti.Update.Key.PK === senderUserKey.PK && ti.Update.Key.SK === senderUserKey.SK);
+    if (senderUpdate && senderUpdate.Update.ExpressionAttributeValues) {
+      senderUpdate.Update.ExpressionAttributeValues[':notifToAdd'] = [notificationForSender];
+    }
   } catch (e) {
     // Best-effort: don't block the transaction if notification marshalling fails
     Logger.warn('acceptFriendRequestTransaction', 'Failed to prepare notification', e && e.message);
