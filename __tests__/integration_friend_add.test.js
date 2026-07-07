@@ -97,8 +97,25 @@ describe('Integration: /friends/add with sockets', () => {
     expect(responseData.currentUser.friendRequests[0]?.To).toBeTruthy();
     expect(responseData.currentUser.friendRequests[0]?.To?.userId).toBe(recipientId);
     expect(responseData.currentUser.friendRequests[0]?.To?.SenderUserId).toBe(senderId);
+    expect(responseData.currentUser.friendRequests[0]?.To?.userName).toBeDefined();
+    expect(responseData.currentUser.friendRequests[0]?.To?.profileImageUrl).toBeDefined();
+    expect(responseData.currentUser.friendRequests[0]?.To?.displayName).toBeDefined();
     expect(responseData.currentUser.friendRequests[0]?.userName).toBeDefined();
     expect(responseData.currentUser.friendIds).toBeDefined();
     expect(responseData.currentUser.userId).toBe(senderId);
+
+    const persistedSender = await svc.getUserById(senderId);
+    expect(persistedSender).toBeTruthy();
+    expect(persistedSender.userId).toBe(senderId);
+    expect(persistedSender.userName).toBeDefined();
+    expect(persistedSender.name).toBeDefined();
+    expect(persistedSender.displayName).toBeDefined();
+    expect(persistedSender.profileImageUrl).toBeDefined();
+    expect(persistedSender.friendRequests).toBeTruthy();
+    expect(Array.isArray(persistedSender.friendRequests)).toBe(true);
+    expect(persistedSender.friendRequests[0]?.To).toBeTruthy();
+    expect(persistedSender.friendRequests[0]?.To?.userName).toBeDefined();
+    expect(persistedSender.friendRequests[0]?.To?.profileImageUrl).toBeDefined();
+    expect(persistedSender.friendRequests[0]?.To?.displayName).toBeDefined();
   });
 });

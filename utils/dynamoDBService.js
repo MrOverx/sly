@@ -266,15 +266,33 @@ function normalizeAuthType(value) {
 function buildProfileImageFields(user) {
   const profileImageUrl = normalizeProfileImageReference(user.profileImageUrl);
   const profileImagePath = normalizeProfileImageReference(user.profileImagePath);
+  const imageUrl = profileImageUrl || profileImagePath || null;
+  const imagePath = profileImagePath || profileImageUrl || null;
+
+  const baseFields = {
+    profileImageUrl: imageUrl,
+    profileImagePath: imagePath,
+    profile_image_url: imageUrl,
+    profile_image_path: imagePath,
+    avatarUrl: imageUrl,
+    avatar_url: imageUrl,
+    displayImageUrl: imageUrl,
+    display_image_url: imageUrl,
+    displayImagePath: imagePath,
+    display_image_path: imagePath,
+  };
 
   if (profileImageUrl && profileImagePath && profileImageUrl === profileImagePath) {
-    return { profileImageUrl, profileImagePath: null };
+    return {
+      ...baseFields,
+      profileImagePath: null,
+      profile_image_path: null,
+      displayImagePath: null,
+      display_image_path: null,
+    };
   }
 
-  return {
-    profileImageUrl: profileImageUrl || profileImagePath || null,
-    profileImagePath: profileImagePath || null,
-  };
+  return baseFields;
 }
 
 function buildItemKey(prefix, id, sk = METADATA_SK) {
@@ -375,12 +393,15 @@ function buildUserItem(user) {
           ? 'MAIL'
           : 'LOCAL');
 
+  const displayName = user.userName || user.name || user.displayName || 'User';
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
     ...user,
     itemType: 'USER',
     userId: String(user.userId),
-    userName: user.userName || 'User',
+    userName: displayName,
+    name: user.name || displayName,
+    displayName: user.displayName || displayName,
     email: emailValue,
     authType,
     isGuest: Boolean(user.isGuest),
@@ -557,13 +578,21 @@ function buildFriendRequestReference(requestItem, status = 'pending', currentUse
     const toAvatarColor = other.avatarColor || '#128C7E';
     const toAvatarLetter = other.avatarLetter || String(toUserName || toUserId).charAt(0).toUpperCase();
     const toProfileImage = other.profileImageUrl || other.profileImagePath || null;
+    const toProfileImagePath = other.profileImagePath || other.profileImageUrl || null;
     return {
       userId: toUserId,
       SenderUserId: senderId,
       userName: toUserName,
+      name: other.name || toUserName,
+      displayName: other.displayName || toUserName,
       avatarColor: toAvatarColor,
       avatarLetter: toAvatarLetter,
       profileImageUrl: toProfileImage,
+      profileImagePath: toProfileImagePath,
+      avatarUrl: toProfileImage,
+      avatar_url: toProfileImage,
+      profile_image_url: toProfileImage,
+      profile_image_path: toProfileImagePath,
     };
   })();
 
@@ -831,14 +860,22 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     ? (toObj.avatarLetter || (toObj.userName ? String(toObj.userName).charAt(0).toUpperCase() : String(toUserId).charAt(0).toUpperCase()))
     : String(fromUserName || toUserId).charAt(0).toUpperCase();
   const toProfileImage = toObj ? (toObj.profileImageUrl || toObj.profileImagePath || null) : fromUserImage || null;
+  const toProfileImagePath = toObj ? (toObj.profileImagePath || toObj.profileImageUrl || null) : (fromUserImage || null);
 
   payload.To = {
     userId: toUserId,
     SenderUserId: senderId,
     userName: toUserName,
+    name: toObj?.name || toUserName,
+    displayName: toObj?.displayName || toUserName,
     avatarColor: toAvatarColor,
     avatarLetter: toAvatarLetter,
     profileImageUrl: toProfileImage,
+    profileImagePath: toProfileImagePath,
+    avatarUrl: toProfileImage,
+    avatar_url: toProfileImage,
+    profile_image_url: toProfileImage,
+    profile_image_path: toProfileImagePath,
   };
 
   if (senderPayload) {
