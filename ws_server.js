@@ -2167,12 +2167,12 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
 
     // Emit socket events with normalized friend request payload to the sender
     const senderSocketId = userSockets.get(friendRequest.userId);
-    const acceptedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
-    acceptedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
+    const senderEventPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
+    senderEventPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
     const senderNewFriendPayload = buildCompleteUserProfile(recipientUser, friendRequest.userId);
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_accepted', {
-        ...acceptedPayload,
+        ...senderEventPayload,
         newFriend: senderNewFriendPayload,
       });
 
@@ -2184,6 +2184,8 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     }
 
     const recipientSocketId = userSockets.get(userId);
+    const responseRequestPayload = buildFriendRequestPayload(updatedRequest, userId, senderUser, recipientUser);
+    responseRequestPayload.isIncoming = true;
 
     // Emit pending_requests_updated to the sender to refresh their pending/outgoing lists
     try {
@@ -2260,7 +2262,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
-      request: acceptedPayload,
+      request: responseRequestPayload,
       currentUser: buildCompleteUserProfile(updatedCurrentUser, userId) || buildCompleteUserProfile(recipientUser, userId),
       newFriend: recipientNewFriendPayload || senderNewFriendPayload,
       updatedFriendsList,
@@ -2345,14 +2347,17 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
 
     // Emit socket event to sender with normalized request payload
     const senderSocketId = userSockets.get(friendRequest.userId);
-    const deniedPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
-    deniedPayload.isIncoming = false;  // ✅ Mark as outgoing for sender
+    const senderEventPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
+    senderEventPayload.isIncoming = false;  // ✅ Mark as outgoing for sender
     if (senderSocketId) {
       io.to(senderSocketId).emit('friend_request_denied', {
-        ...deniedPayload,
+        ...senderEventPayload,
         message: `${recipientUser?.userName || 'Someone'} denied your friend request`,
       });
     }
+
+    const responseRequestPayload = buildFriendRequestPayload(updatedRequest, userId, senderUser, recipientUser);
+    responseRequestPayload.isIncoming = true;
 
     // ✅ Get and return the updated current user to preserve all profile fields
     let updatedCurrentUser = userCache.get(userId);
@@ -2364,7 +2369,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
-      request: deniedPayload,
+      request: responseRequestPayload,
       currentUser: buildCompleteUserProfile(updatedCurrentUser || recipientUser, userId),
     });
   } catch (err) {
