@@ -524,7 +524,7 @@ function isObjectFriendRequests(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value) && (Array.isArray(value.sent) || Array.isArray(value.received));
 }
 
-function buildFriendRequestReference(requestItem, status = 'pending') {
+function buildFriendRequestReference(requestItem, status = 'pending', currentUserId = null, senderUser = null, recipientUser = null) {
   const normalizedRequest = normalizeFriendRequestItem(requestItem || {});
   const senderId = normalizeIdValue(normalizedRequest.userId || normalizedRequest.senderId || normalizedRequest.fromUserId || null);
   const recipientId = normalizeIdValue(normalizedRequest.recipientId || normalizedRequest.friendId || normalizedRequest.toUserId || normalizedRequest.recipientUserId || null);
@@ -532,7 +532,24 @@ function buildFriendRequestReference(requestItem, status = 'pending') {
   const requestType = normalizedRequest.RequestType || normalizedRequest.requestType || normalizedRequest.type || (recipientId ? 'FRIEND_REQUEST_INCOMING' : 'FRIEND_REQUEST_OUTGOING');
   const receiverIdUserId = normalizedRequest.ReceiverIdUserId || normalizedRequest.receiverIdUserId || recipientId || '';
   const isRead = normalizedRequest.isRead === true || normalizedRequest.isRead === 'true' || false;
-  const toObj = (normalizedRequest.To || normalizedRequest.to) ? (normalizedRequest.To || normalizedRequest.to) : null;
+  const requestedSender = senderUser || normalizedRequest.sender || normalizedRequest.senderUser || normalizedRequest.fromUser || null;
+  const requestedRecipient = recipientUser || normalizedRequest.recipient || normalizedRequest.recipientUser || normalizedRequest.toUser || normalizedRequest.to || null;
+
+  const senderSnapshot = buildUserSnapshot(requestedSender);
+  const recipientSnapshot = buildUserSnapshot(requestedRecipient);
+  const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
+  const toCandidate = normalizedRequest.To || normalizedRequest.to || null;
+  const toObj = toCandidate || (isIncoming ? senderSnapshot : recipientSnapshot) || null;
+  const toPayload = toObj
+    ? {
+        userId: normalizeIdValue(toObj.userId || toObj.friendId || toObj.id || ''),
+        SenderUserId: senderId,
+        userName: toObj.userName || toObj.name || toObj.displayName || toObj.userId || toObj.friendId || '',
+        avatarColor: toObj.avatarColor || '#128C7E',
+        avatarLetter: toObj.avatarLetter || (toObj.userName ? String(toObj.userName).charAt(0).toUpperCase() : String(toObj.userId || toObj.friendId || '').charAt(0).toUpperCase()),
+        profileImageUrl: toObj.profileImageUrl || toObj.profileImagePath || null,
+      }
+    : null;
 
   return {
     requestId,
@@ -546,12 +563,14 @@ function buildFriendRequestReference(requestItem, status = 'pending') {
     RequestType: requestType,
     ReceiverIdUserId: receiverIdUserId,
     isRead: isRead,
-    To: toObj,
+    To: toPayload,
+    sender: senderSnapshot,
+    recipient: recipientSnapshot,
   };
 }
 
-function mergeFriendRequestReference(existingRequests = [], requestItem, status = 'pending', currentUserId = null) {
-  const reference = buildFriendRequestReference(requestItem, status);
+function mergeFriendRequestReference(existingRequests = [], requestItem, status = 'pending', currentUserId = null, senderUser = null, recipientUser = null) {
+  const reference = buildFriendRequestReference(requestItem, status, currentUserId, senderUser, recipientUser);
   const requestId = reference.requestId;
 
   if (isObjectFriendRequests(existingRequests)) {
@@ -673,7 +692,7 @@ function removeFriendRequestReference(existingRequests = [], requestItemOrId, cu
   return filtered;
 }
 
-async function persistFriendRequestOnUser(userId, requestItem, status = 'pending') {
+async function persistFriendRequestOnUser(userId, requestItem, status = 'pending', senderUser = null, recipientUser = null) {
   if (!userId || !requestItem) return null;
 
   let currentUser = await getUserById(userId);
@@ -701,7 +720,7 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
   const existingRequests = Array.isArray(currentUser?.friendRequests) || isObjectFriendRequests(currentUser?.friendRequests)
     ? currentUser.friendRequests
     : [];
-  const nextRequests = mergeFriendRequestReference(existingRequests, requestItem, status, userId);
+  const nextRequests = mergeFriendRequestReference(existingRequests, requestItem, status, userId, senderUser, recipientUser);
 
   const updatedUser = await updateUserById(userId, {
     friends: nextFriends,
@@ -1535,7 +1554,7 @@ async function getFriendBetween(userId, friendId) {
   return getFriendRequest(friendId, userId);
 }
 
-async function createFriendRequest(userId, friendId) {
+async function createFriendRequest(userId, friendId, senderUser = null, recipientUser = null) {
   if (!USE_DEV_STORE) await loadTableSchema();
 
   if (USE_DEV_STORE) {
@@ -1552,8 +1571,8 @@ async function createFriendRequest(userId, friendId) {
       items[existingIndex] = updatedExisting;
       saveDevStore(items);
       await Promise.all([
-        persistFriendRequestOnUser(userId, updatedExisting, 'pending'),
-        persistFriendRequestOnUser(friendId, updatedExisting, 'pending'),
+        persistFriendRequestOnUser(userId, updatedExisting, 'pending', senderUser, recipientUser),
+        persistFriendRequestOnUser(friendId, updatedExisting, 'pending', senderUser, recipientUser),
       ]);
       return updatedExisting;
     }
@@ -1562,8 +1581,8 @@ async function createFriendRequest(userId, friendId) {
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
     await Promise.all([
-      persistFriendRequestOnUser(userId, item, 'pending'),
-      persistFriendRequestOnUser(friendId, item, 'pending'),
+      persistFriendRequestOnUser(userId, item, 'pending', senderUser, recipientUser),
+      persistFriendRequestOnUser(friendId, item, 'pending', senderUser, recipientUser),
     ]);
     return item;
   }
@@ -1571,13 +1590,13 @@ async function createFriendRequest(userId, friendId) {
   const item = buildFriendItem(userId, friendId, 'pending');
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   await Promise.all([
-    persistFriendRequestOnUser(userId, item, 'pending'),
-    persistFriendRequestOnUser(friendId, item, 'pending'),
+    persistFriendRequestOnUser(userId, item, 'pending', senderUser, recipientUser),
+    persistFriendRequestOnUser(friendId, item, 'pending', senderUser, recipientUser),
   ]);
   return item;
 }
 
-async function updateFriendRequestStatus(userId, friendId, status) {
+async function updateFriendRequestStatus(userId, friendId, status, senderUser = null, recipientUser = null) {
   if (!USE_DEV_STORE) await loadTableSchema();
   const current = await getFriendRequest(userId, friendId);
   if (!current) return null;
@@ -1591,8 +1610,8 @@ async function updateFriendRequestStatus(userId, friendId, status) {
     items[index] = updated;
     upsertDevStoreItem(updated);
     await Promise.all([
-      persistFriendRequestOnUser(userId, updated, status),
-      persistFriendRequestOnUser(friendId, updated, status),
+      persistFriendRequestOnUser(userId, updated, status, senderUser, recipientUser),
+      persistFriendRequestOnUser(friendId, updated, status, senderUser, recipientUser),
     ]);
     return updated;
   }

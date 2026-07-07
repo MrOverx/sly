@@ -2079,7 +2079,7 @@ app.post('/friends/add', async (req, res) => {
       if (recipientUser) userCache.set(friendId, recipientUser);
     }
 
-    const friendRequest = await createFriendRequest(userId, friendId);
+    const friendRequest = await createFriendRequest(userId, friendId, senderUser, recipientUser);
 
     // Debug: log incoming request and created record
     Logger.debug('friends/add', 'Received friends/add', { body: req.body, userId, friendId });
@@ -2345,7 +2345,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     }
 
     // Update request status to denied
-    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'denied');
+    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'denied', senderUser, recipientUser);
 
     userCache.invalidate(userId);
     userCache.invalidate(friendRequest.userId);
