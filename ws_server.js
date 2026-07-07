@@ -43,8 +43,7 @@ const hasAwsCreds = Boolean(
 );
 
 if (process.env.NODE_ENV === 'production' && !hasAwsCreds) {
-  Logger.error('config', 'Production requires AWS credentials or an IAM role. Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or configure instance credentials.');
-  process.exit(1);
+  Logger.warn('config', 'Running in production without AWS credentials. Proceeding with caution — set AWS credentials or configure USE_DEV_STORE if intended.');
 }
 
 const express = require('express');

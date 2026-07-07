@@ -419,6 +419,9 @@ function buildUserItem(user) {
               .filter(Boolean)
           : []),
     friends: Array.isArray(user.friends) ? user.friends : [],
+    friendRequests: user.friendRequests && (Array.isArray(user.friendRequests) || isObjectFriendRequests(user.friendRequests))
+      ? user.friendRequests
+      : [],
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -630,6 +633,46 @@ function mergeFriendList(existingFriends = [], friendId) {
   return nextFriends;
 }
 
+function removeFriendRequestReference(existingRequests = [], requestItemOrId, currentUserId = null) {
+  // Determine requestId from object or string
+  let requestId = '';
+  if (!requestItemOrId) requestId = '';
+  else if (typeof requestItemOrId === 'string') requestId = normalizeIdValue(requestItemOrId);
+  else if (typeof requestItemOrId === 'object') {
+    const r = requestItemOrId;
+    const sender = normalizeIdValue(r.userId || r.senderId || r.fromUserId || r.from || null);
+    const recipient = normalizeIdValue(r.recipientId || r.friendId || r.toUserId || r.to || null);
+    requestId = normalizeIdValue(r.requestId || `${sender}|${recipient}`);
+  }
+
+  if (!requestId) return Array.isArray(existingRequests) ? existingRequests : (existingRequests || {});
+
+  if (isObjectFriendRequests(existingRequests)) {
+    const bucket = (normalizeIdValue(currentUserId) === normalizeIdValue((requestItemOrId && requestItemOrId.userId) || (requestItemOrId && requestItemOrId.senderId)))
+      ? 'sent'
+      : 'received';
+    const nextEntries = normalizeFriendRequestEntries(existingRequests[bucket]);
+    const filtered = nextEntries.filter((entry) => {
+      if (!entry || typeof entry !== 'object') return true;
+      const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+      return candidateId !== requestId;
+    });
+    return {
+      ...existingRequests,
+      [bucket]: filtered,
+    };
+  }
+
+  const nextRequests = Array.isArray(existingRequests) ? existingRequests.filter(Boolean) : [];
+  const filtered = nextRequests.filter((entry) => {
+    if (!entry || typeof entry !== 'object') return true;
+    const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
+    return candidateId !== requestId;
+  });
+
+  return filtered;
+}
+
 async function persistFriendRequestOnUser(userId, requestItem, status = 'pending') {
   if (!userId || !requestItem) return null;
 
@@ -718,6 +761,13 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     fromUserAvatar,
     fromUserImage,
     profileImageUrl: fromUserImage,
+    notificationUserId: fromUserId,
+    notificationUserName: fromUserName,
+    notificationUserImageUrl: fromUserImage,
+    notificationUserAvatarColor: fromUserAvatar,
+    notificationUserAvatarLetter: String(fromUserName || fromUserId).isNotEmpty
+      ? String(fromUserName || fromUserId).charAt(0).toUpperCase()
+      : 'U',
   };
 
   // Add new compatible friend-request payload fields
