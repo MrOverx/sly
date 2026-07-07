@@ -108,30 +108,6 @@ function normalizeIsoTimestamp(value) {
   return null;
 }
 
-function normalizeFriendRequestsPayload(value) {
-  if (Array.isArray(value)) {
-    return value;
-  }
-
-  if (value && typeof value === 'object') {
-    if (Array.isArray(value.sent) || Array.isArray(value.received)) {
-      return {
-        sent: Array.isArray(value.sent) ? value.sent : [],
-        received: Array.isArray(value.received) ? value.received : [],
-      };
-    }
-    if (Array.isArray(value.incoming) || Array.isArray(value.outgoing)) {
-      return {
-        incoming: Array.isArray(value.incoming) ? value.incoming : [],
-        outgoing: Array.isArray(value.outgoing) ? value.outgoing : [],
-      };
-    }
-    return value;
-  }
-
-  return [];
-}
-
 // ✅ NEW: Build complete user profile with ALL fields for frontend data persistence
 // Ensures backend payloads match the expected frontend user schema and aliases.
 function normalizeIdValue(value) {
@@ -165,35 +141,7 @@ function normalizeFriendReferences(friends) {
     .filter((item) => item && item.friendId);
 }
 
-function normalizeFriendRequestsForClient(requests, currentUserId) {
-  const normalized = [];
-  if (!requests) return normalized;
-
-  if (Array.isArray(requests)) {
-    for (const req of requests) {
-      const serialized = serializeFriendRequestForClient(req, currentUserId);
-      if (serialized) normalized.push(serialized);
-    }
-    return normalized;
-  }
-
-  if (typeof requests === 'object') {
-    const keys = ['sent', 'received', 'incoming', 'outgoing'];
-    for (const key of keys) {
-      const group = requests[key];
-      if (Array.isArray(group)) {
-        for (const req of group) {
-          const serialized = serializeFriendRequestForClient(req, currentUserId);
-          if (serialized) normalized.push(serialized);
-        }
-      }
-    }
-  }
-
-  return normalized;
-}
-
-function buildCompleteUserProfile(user) {
+function buildCompleteUserProfile(user, currentUserId = null) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
   const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
@@ -202,6 +150,12 @@ function buildCompleteUserProfile(user) {
   const normalizedFriendIds = Array.isArray(user.friendIds)
     ? user.friendIds.map((id) => String(id))
     : normalizedFriends.map((friend) => friend.friendId);
+
+  const currentId = currentUserId || user.userId || null;
+  const rawRequests = Array.isArray(user.friendRequests) ? user.friendRequests : (user.friendRequests || []);
+  const serializedRequests = Array.isArray(rawRequests)
+    ? rawRequests.map((r) => serializeFriendRequestForClient(r, currentId)).filter(Boolean)
+    : [];
 
   return {
     userId: user.userId || user.id || user._id || null,
@@ -227,22 +181,16 @@ function buildCompleteUserProfile(user) {
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
     friends: normalizedFriends,
     friendIds: normalizedFriendIds,
-    friendRequests: normalizeFriendRequestsForClient(user.friendRequests, user.userId || user.id || user._id || null),
-    pendingFriendRequests: normalizeFriendRequestsForClient(user.pendingFriendRequests, user.userId || user.id || user._id || null),
-    pendingIncomingRequests: normalizeFriendRequestsForClient(
-      user.pendingFriendRequests?.incoming || user.pendingIncomingRequests,
-      user.userId || user.id || user._id || null,
-    ),
-    pendingOutgoingRequests: normalizeFriendRequestsForClient(
-      user.pendingFriendRequests?.outgoing || user.pendingOutgoingRequests,
-      user.userId || user.id || user._id || null,
-    ),
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
     isOnline: user.isOnline === true,
     isFriend: user.isFriend === true,
     lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
+    friendRequests: serializedRequests,
+    profileComplete: user.profileComplete === true,
+    createdAt: user.createdAt || null,
+    updatedAt: user.updatedAt || null,
   };
 }
 
@@ -1832,7 +1780,6 @@ async function handleGetUserProfile(req, res) {
 
     const friendCount = await countFriendsForUser(userId);
 
-    // Fetch friend IDs and expose them as lightweight friend references.
     const friendIds = await listFriendsForUser(userId);
     const friends = Array.isArray(friendIds) && friendIds.length
       ? friendIds.map((friendId) => ({
@@ -1841,45 +1788,11 @@ async function handleGetUserProfile(req, res) {
         }))
       : [];
 
-    // Fetch pending friend requests (incoming and outgoing) so client can populate notifications
-    const pendingIncoming = await queryFriendRequestsByRecipient(userId);
-    const pendingOutgoing = await queryFriendRequestsBySender(userId);
-
-    // Gather related user IDs to enrich request payloads
-    const relatedUserIds = new Set();
-    (pendingIncoming || []).forEach((r) => { if (r.userId) relatedUserIds.add(String(r.userId)); if (r.friendId) relatedUserIds.add(String(r.friendId)); });
-    (pendingOutgoing || []).forEach((r) => { if (r.userId) relatedUserIds.add(String(r.userId)); if (r.friendId) relatedUserIds.add(String(r.friendId)); });
-    const relatedUsers = relatedUserIds.size ? await getUsersByIds(Array.from(relatedUserIds)) : [];
-    const relatedById = {};
-    (relatedUsers || []).forEach((u) => { if (u && u.userId) relatedById[String(u.userId)] = u; });
-
-    const serializeRequests = (items, currentUserId, isIncoming = false) => {
-      if (!Array.isArray(items)) return [];
-      return items.map((req) => {
-        const sender = relatedById[String(req.userId)] || null;
-        const recipient = relatedById[String(req.friendId)] || null;
-        const payload = buildFriendRequestPayload(req, currentUserId, sender, recipient);
-        payload.isIncoming = isIncoming;
-        return payload;
-      });
-    };
-
-    const incomingRequests = serializeRequests(pendingIncoming, userId, true);
-    const outgoingRequests = serializeRequests(pendingOutgoing, userId, false);
-
-    const pending = (incomingRequests.length || outgoingRequests.length)
-      ? {
-          incoming: incomingRequests.length ? incomingRequests : null,
-          outgoing: outgoingRequests.length ? outgoingRequests : null,
-        }
-      : null;
-
     return sendSuccess(res, {
       user: {
         ...buildCompleteUserProfile(user),
         friendCount,
         friends: friends.length ? friends : [],
-        friendRequests: [...incomingRequests, ...outgoingRequests],
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
       },
@@ -2185,8 +2098,6 @@ app.post('/friends/add', async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
-      request: senderResponsePayload,
-      requestId: friendRequest.requestId,
       currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser),
     });
   } catch (err) {
@@ -2357,7 +2268,6 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request accepted',
-      request: acceptedPayload,
       currentUser: updatedCurrentUser || recipientUser,
       newFriend: recipientNewFriendPayload || senderNewFriendPayload,
       updatedFriendsList,
@@ -2461,7 +2371,6 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
-      request: deniedPayload,
       currentUser: updatedCurrentUser || recipientUser,
     });
   } catch (err) {
@@ -2747,21 +2656,7 @@ app.get('/notifications', async (req, res) => {
     // Notifications are stored as an array on the USER record under `notifications`.
     const notifications = Array.isArray(user?.notifications) ? user.notifications : [];
 
-    // Also include pending friend requests (incoming) for the notifications view
-    const incoming = await queryFriendRequestsByRecipient(userId);
-    const senderIds = incoming.map((r) => normalizeId(r.userId)).filter(Boolean);
-    const senderUsers = senderIds.length ? await getUsersByIds(senderIds) : [];
-    const senderById = {};
-    (senderUsers || []).forEach((u) => { if (u && u.userId) senderById[String(u.userId)] = u; });
-
-    const requestNotifications = (incoming || []).map((reqItem) => {
-      const sender = senderById[String(reqItem.userId)] || null;
-      const payload = serializeFriendRequestForClient(reqItem, userId, sender, null);
-      payload.type = 'friend_request';
-      return payload;
-    });
-
-    const combined = [...requestNotifications, ...notifications];
+    const combined = [...notifications];
 
     return sendSuccess(res, { data: combined }, 'Notifications retrieved');
   } catch (err) {

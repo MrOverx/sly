@@ -377,6 +377,7 @@ function buildUserItem(user) {
 
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
+    ...user,
     itemType: 'USER',
     userId: String(user.userId),
     userName: user.userName || 'User',
@@ -418,8 +419,6 @@ function buildUserItem(user) {
               .filter(Boolean)
           : []),
     friends: Array.isArray(user.friends) ? user.friends : [],
-    friendRequests: normalizeFriendRequestsValue(user.friendRequests),
-    pendingFriendRequests: normalizeFriendRequestsValue(user.pendingFriendRequests),
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -522,26 +521,15 @@ function isObjectFriendRequests(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value) && (Array.isArray(value.sent) || Array.isArray(value.received));
 }
 
-function normalizeFriendRequestsValue(value) {
-  if (Array.isArray(value)) {
-    return normalizeFriendRequestEntries(value);
-  }
-
-  if (isObjectFriendRequests(value)) {
-    return {
-      sent: normalizeFriendRequestEntries(value.sent),
-      received: normalizeFriendRequestEntries(value.received),
-    };
-  }
-
-  return [];
-}
-
 function buildFriendRequestReference(requestItem, status = 'pending') {
   const normalizedRequest = normalizeFriendRequestItem(requestItem || {});
   const senderId = normalizeIdValue(normalizedRequest.userId || normalizedRequest.senderId || normalizedRequest.fromUserId || null);
   const recipientId = normalizeIdValue(normalizedRequest.recipientId || normalizedRequest.friendId || normalizedRequest.toUserId || normalizedRequest.recipientUserId || null);
   const requestId = normalizeIdValue(normalizedRequest.requestId || `${senderId}|${recipientId}`);
+  const requestType = normalizedRequest.RequestType || normalizedRequest.requestType || normalizedRequest.type || (recipientId ? 'FRIEND_REQUEST_INCOMING' : 'FRIEND_REQUEST_OUTGOING');
+  const receiverIdUserId = normalizedRequest.ReceiverIdUserId || normalizedRequest.receiverIdUserId || recipientId || '';
+  const isRead = normalizedRequest.isRead === true || normalizedRequest.isRead === 'true' || false;
+  const toObj = (normalizedRequest.To || normalizedRequest.to) ? (normalizedRequest.To || normalizedRequest.to) : null;
 
   return {
     requestId,
@@ -552,6 +540,10 @@ function buildFriendRequestReference(requestItem, status = 'pending') {
     status: String(status || normalizedRequest.status || 'pending').toLowerCase(),
     createdAt: normalizedRequest.createdAt || new Date().toISOString(),
     updatedAt: normalizedRequest.updatedAt || new Date().toISOString(),
+    RequestType: requestType,
+    ReceiverIdUserId: receiverIdUserId,
+    isRead: isRead,
+    To: toObj,
   };
 }
 
@@ -616,34 +608,6 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
   return nextRequests;
 }
 
-function removeFriendRequestReference(existingRequests = [], requestItem) {
-  const senderId = normalizeIdValue(requestItem?.userId || requestItem?.senderId || requestItem?.fromUserId || null);
-  const recipientId = normalizeIdValue(requestItem?.recipientId || requestItem?.friendId || requestItem?.toUserId || requestItem?.recipientUserId || null);
-  const requestId = normalizeIdValue(requestItem?.requestId || `${senderId}|${recipientId}`);
-
-  if (!requestId) return existingRequests;
-
-  if (isObjectFriendRequests(existingRequests)) {
-    const nextEntries = {};
-    for (const bucket of ['sent', 'received']) {
-      const bucketEntries = normalizeFriendRequestEntries(existingRequests[bucket]);
-      nextEntries[bucket] = bucketEntries.filter((entry) => {
-        if (!entry || typeof entry !== 'object') return true;
-        const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
-        return candidateId !== requestId;
-      });
-    }
-    return nextEntries;
-  }
-
-  const nextRequests = Array.isArray(existingRequests) ? existingRequests.filter(Boolean) : [];
-  return nextRequests.filter((entry) => {
-    if (!entry || typeof entry !== 'object') return true;
-    const candidateId = normalizeIdValue(entry.requestId || `${entry.userId || entry.senderId || ''}|${entry.friendId || entry.recipientId || ''}`);
-    return candidateId !== requestId;
-  });
-}
-
 function mergeFriendList(existingFriends = [], friendId) {
   const normalizedFriendId = normalizeIdValue(friendId);
   if (!normalizedFriendId) return Array.isArray(existingFriends) ? existingFriends : [];
@@ -676,7 +640,6 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
       const nextRequests = mergeFriendRequestReference([], requestItem, status, userId);
       const updatedUser = await updateUserById(userId, {
         friendRequests: nextRequests,
-        pendingFriendRequests: nextRequests,
       });
       return updatedUser;
     }
@@ -684,19 +647,23 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
     return null;
   }
 
-  const nextRequests = mergeFriendRequestReference(currentUser?.friendRequests, requestItem, status, userId);
   const nextFriends = status === 'accepted'
     ? mergeFriendList(currentUser?.friends || currentUser?.friendIds || [], requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)
     : (Array.isArray(currentUser?.friends) ? currentUser.friends : []);
   const nextFriendIds = status === 'accepted'
     ? [...new Set([...(Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []), normalizeIdValue(requestItem?.friendId || requestItem?.recipientId || requestItem?.toUserId)])]
     : (Array.isArray(currentUser?.friendIds) ? currentUser.friendIds : []);
+  // Merge friend request reference into the user's friendRequests list so
+  // frontend can read incoming/outgoing requests directly from the user profile.
+  const existingRequests = Array.isArray(currentUser?.friendRequests) || isObjectFriendRequests(currentUser?.friendRequests)
+    ? currentUser.friendRequests
+    : [];
+  const nextRequests = mergeFriendRequestReference(existingRequests, requestItem, status, userId);
 
   const updatedUser = await updateUserById(userId, {
-    friendRequests: nextRequests,
-    pendingFriendRequests: nextRequests,
     friends: nextFriends,
     friendIds: nextFriendIds,
+    friendRequests: nextRequests,
   });
 
   return updatedUser;
@@ -735,22 +702,37 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
 
   const payload = {
     requestId,
+    userId: senderId,
+    senderId,
+    recipientId,
+    friendId: recipientId,
+    status: request.status || 'pending',
+    createdAt: request.createdAt || null,
+    updatedAt: request.updatedAt || null,
+    isIncoming,
+    isOutgoing: !isIncoming,
+    itemType: 'FRIEND',
+    type: isIncoming ? 'friend_request' : 'friend_request_outgoing',
     fromUserId,
     fromUserName,
     fromUserAvatar,
     fromUserImage,
     profileImageUrl: fromUserImage,
-    userId: senderId,
-    senderId,
-    recipientId,
-    friendId: recipientId,
-    recipientUserId: recipientId,
-    status: request.status || 'pending',
-    createdAt: request.createdAt || null,
-    isIncoming,
-    isOutgoing: !isIncoming,
-    itemType: 'FRIEND',
-    type: isIncoming ? 'friend_request' : 'friend_request_outgoing',
+  };
+
+  // Add new compatible friend-request payload fields
+  payload.RequestType = isIncoming ? 'FRIEND_REQUEST_INCOMING' : 'FRIEND_REQUEST_OUTGOING';
+  payload.ReceiverIdUserId = recipientId;
+  payload.isRead = request.isRead === true || request.isRead === 'true' || false;
+
+  // Provide a small `To` object with sender summary for client convenience
+  const toObj = (sourceSender || sourceRecipient) ? (sourceSender || sourceRecipient) : null;
+  payload.To = {
+    SenderUserId: senderId,
+    userName: toObj ? (toObj.userName || toObj.name || senderId) : (fromUserName || senderId),
+    avatarColor: toObj ? (toObj.avatarColor || '#128C7E') : (fromUserAvatar || '#128C7E'),
+    avatarLetter: toObj ? (toObj.avatarLetter || (toObj.userName ? String(toObj.userName).charAt(0).toUpperCase() : String(senderId).charAt(0).toUpperCase())) : (String(fromUserName || senderId).charAt(0).toUpperCase()),
+    profileImageUrl: toObj ? (toObj.profileImageUrl || toObj.profileImagePath || null) : fromUserImage || null,
   };
 
   if (senderPayload) {
@@ -1588,13 +1570,10 @@ async function removeFriendRequestReferenceFromUser(userId, requestItem) {
   const currentUser = await getUserById(userId);
   if (!currentUser) return null;
 
-  const nextRequests = removeFriendRequestReference(currentUser.friendRequests, requestItem);
   const nextFriends = Array.isArray(currentUser.friends) ? currentUser.friends : [];
   const nextFriendIds = Array.isArray(currentUser.friendIds) ? currentUser.friendIds : [];
 
   return updateUserById(userId, {
-    friendRequests: nextRequests,
-    pendingFriendRequests: nextRequests,
     friends: nextFriends,
     friendIds: nextFriendIds,
     updatedAt: new Date().toISOString(),
@@ -2216,18 +2195,12 @@ async function acceptFriendRequestTransaction(requestItem) {
       upsertFriendIdForUser(items, senderId, recipientId);
       upsertFriendIdForUser(items, recipientId, senderId);
 
-      // Mark the pending friend request as accepted in both user profile arrays.
-      const acceptedRequest = buildFriendRequestReference({ ...requestItem, status: 'accepted', updatedAt: new Date().toISOString() }, 'accepted');
       const senderUser = items.find((e) => e.itemType === 'USER' && String(e.userId) === String(senderId));
       if (senderUser) {
-        senderUser.friendRequests = mergeFriendRequestReference(Array.isArray(senderUser.friendRequests) ? senderUser.friendRequests : senderUser.friendRequests, acceptedRequest, 'accepted', senderUser.userId);
-        senderUser.pendingFriendRequests = senderUser.friendRequests;
         senderUser.updatedAt = new Date().toISOString();
       }
       const recipientUser = items.find((e) => e.itemType === 'USER' && String(e.userId) === String(recipientId));
       if (recipientUser) {
-        recipientUser.friendRequests = mergeFriendRequestReference(Array.isArray(recipientUser.friendRequests) ? recipientUser.friendRequests : recipientUser.friendRequests, acceptedRequest, 'accepted', recipientUser.userId);
-        recipientUser.pendingFriendRequests = recipientUser.friendRequests;
         recipientUser.updatedAt = new Date().toISOString();
       }
 
