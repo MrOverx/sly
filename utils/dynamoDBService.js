@@ -775,8 +775,11 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
     : [];
   const nextRequests = mergeFriendRequestReference(existingRequests, requestItem, status, userId, requestMetadata);
 
+  // ✅ IMPORTANT: Always pass the complete user profile when updating to preserve all user fields
+  // This prevents data loss when persisting friend request changes.
   const updatedUser = await updateUserById(userId, {
-    friends: nextFriends,
+    ...currentUser,  // Spread all existing user fields first
+    friends: nextFriends,  // Then override only the fields we're changing
     friendIds: nextFriendIds,
     friendRequests: nextRequests,
   });
@@ -1730,8 +1733,10 @@ async function removeFriendRequestReferenceFromUser(userId, requestItem) {
   const nextFriends = Array.isArray(currentUser.friends) ? currentUser.friends : [];
   const nextFriendIds = Array.isArray(currentUser.friendIds) ? currentUser.friendIds : [];
 
+  // ✅ IMPORTANT: Always pass the complete user profile when updating to preserve all user fields
   return updateUserById(userId, {
-    friends: nextFriends,
+    ...currentUser,  // Spread all existing user fields first
+    friends: nextFriends,  // Then override only the fields we're changing
     friendIds: nextFriendIds,
     updatedAt: new Date().toISOString(),
   });
