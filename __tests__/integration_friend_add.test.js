@@ -92,7 +92,8 @@ describe('Integration: /friends/add with sockets', () => {
     expect(responseData).toBeTruthy();
     expect(responseData.currentUser).toBeTruthy();
     expect(Array.isArray(responseData.currentUser.friends)).toBe(true);
-    expect(responseData.currentUser.friendRequests).toBeUndefined();
+    expect(Array.isArray(responseData.currentUser.friendRequests)).toBe(true);
+    expect(Array.isArray(responseData.currentUser.pendingFriendRequests)).toBe(true);
     expect(responseData.currentUser.friendIds).toBeDefined();
     expect(responseData.currentUser.userId).toBe(senderId);
   });
