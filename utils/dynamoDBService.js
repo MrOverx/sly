@@ -720,21 +720,21 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
   const requestId = normalizeIdValue(request.requestId || `${senderId}|${recipientId}`);
   const isIncoming = !!currentUserId && String(currentUserId) === String(recipientId);
 
-  const sourceSender = senderUser || null;
-  const sourceRecipient = recipientUser || null;
+  const sourceSender = senderUser || request.sender || request.senderUser || request.fromUser || null;
+  const sourceRecipient = recipientUser || request.recipient || request.recipientUser || request.toUser || request.to || null;
 
   const fromUserId = isIncoming ? senderId : recipientId;
   const fromUserName = (isIncoming
-    ? (sourceSender?.userName || sourceSender?.name || senderId)
-    : (sourceRecipient?.userName || sourceRecipient?.name || recipientId)) || fromUserId || 'Unknown user';
+    ? (sourceSender?.userName || sourceSender?.name || sourceSender?.displayName || request.To?.userName || senderId)
+    : (sourceRecipient?.userName || sourceRecipient?.name || sourceRecipient?.displayName || request.To?.userName || recipientId)) || fromUserId || 'Unknown user';
 
   const fromUserAvatar = isIncoming
-    ? sourceSender?.avatarColor || '#128C7E'
-    : sourceRecipient?.avatarColor || '#128C7E';
+    ? (sourceSender?.avatarColor || sourceSender?.avatarColor || '#128C7E')
+    : (sourceRecipient?.avatarColor || sourceRecipient?.avatarColor || '#128C7E');
 
   const fromUserImage = isIncoming
-    ? sourceSender?.profileImageUrl || sourceSender?.profileImagePath || null
-    : sourceRecipient?.profileImageUrl || sourceRecipient?.profileImagePath || null;
+    ? (sourceSender?.profileImageUrl || sourceSender?.profileImagePath || request.To?.profileImageUrl || null)
+    : (sourceRecipient?.profileImageUrl || sourceRecipient?.profileImagePath || request.To?.profileImageUrl || null);
 
   const senderPayload = sourceSender
     ? serializeFriendForClient({ ...sourceSender, userId: senderId, id: senderId, friendId: senderId })
@@ -777,7 +777,7 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
   payload.isRead = request.isRead === true || request.isRead === 'true' || false;
 
   // Provide a small `To` object with sender summary for client convenience
-  const toObj = sourceSender || sourceRecipient || null;
+  const toObj = sourceSender || sourceRecipient || request.To || request.to || null;
   const toUserId = isIncoming ? senderId : recipientId;
   const toUserName = toObj ? (toObj.userName || toObj.name || toUserId) : (fromUserName || toUserId);
   const toAvatarColor = toObj ? (toObj.avatarColor || '#128C7E') : (fromUserAvatar || '#128C7E');
@@ -822,14 +822,17 @@ function serializeFriendForClient(user) {
     name: displayName,
     displayName: displayName,
     email: user.email || null,
+    normalizedEmail: user.email ? String(user.email).trim().toLowerCase() : null,
+    emailVerified: user.emailVerified === true,
+    emailVerifiedAt: normalizeIsoTimestamp(user.emailVerifiedAt),
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || String(displayName).charAt(0).toUpperCase(),
+    avatarUrl: profileImageUrl,
+    avatar_url: profileImageUrl,
     profileImageUrl,
     profile_image_url: profileImageUrl,
     profileImagePath,
     profile_image_path: profileImagePath,
-    avatarUrl: profileImageUrl,
-    avatar_url: profileImageUrl,
     displayImagePath: profileImagePath,
     display_image_path: profileImagePath,
     displayImageUrl: profileImageUrl,
@@ -848,6 +851,7 @@ function serializeFriendForClient(user) {
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
     isOnline: user.isOnline === true,
+    isFriend: user.isFriend === true,
     profileComplete: user.profileComplete === true,
     lastDailyXpAwardedAt: user.lastDailyXpAwardedAt || null,
     createdAt: user.createdAt || null,

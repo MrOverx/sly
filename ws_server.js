@@ -140,7 +140,17 @@ function normalizeFriendReferences(friends) {
     .filter((item) => item && item.friendId);
 }
 
-function buildCompleteUserProfile(user, currentUserId = null) {
+function normalizeFriendRequestEntries(entries) {
+  if (Array.isArray(entries)) return entries.filter(Boolean);
+  if (entries && typeof entries === 'object') {
+    const sent = Array.isArray(entries.sent) ? entries.sent.filter(Boolean) : [];
+    const received = Array.isArray(entries.received) ? entries.received.filter(Boolean) : [];
+    return [...sent, ...received];
+  }
+  return [];
+}
+
+function buildCompleteUserProfile(user, currentUserId = null, requestUserMap = new Map()) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
   const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
@@ -151,10 +161,21 @@ function buildCompleteUserProfile(user, currentUserId = null) {
     : normalizedFriends.map((friend) => friend.friendId);
 
   const currentId = currentUserId || user.userId || null;
-  const rawRequests = Array.isArray(user.friendRequests) ? user.friendRequests : (user.friendRequests || []);
-  const serializedRequests = Array.isArray(rawRequests)
-    ? rawRequests.map((r) => serializeFriendRequestForClient(r, currentId)).filter(Boolean)
-    : [];
+  const rawRequests = normalizeFriendRequestEntries(user.friendRequests);
+  const serializedRequests = rawRequests
+    .map((r) => {
+      if (!r || typeof r !== 'object') return null;
+      const senderId = normalizeId(r.userId || r.senderId || r.fromUserId || '');
+      const recipientId = normalizeId(r.recipientId || r.friendId || r.recipientUserId || r.toUserId || '');
+      const senderUser = senderId && requestUserMap.has(senderId)
+        ? requestUserMap.get(senderId)
+        : (senderId ? userCache.get(senderId) : null);
+      const recipientUser = recipientId && requestUserMap.has(recipientId)
+        ? requestUserMap.get(recipientId)
+        : (recipientId ? userCache.get(recipientId) : null);
+      return serializeFriendRequestForClient(r, currentId, senderUser, recipientUser);
+    })
+    .filter(Boolean);
 
   const normalizedEmail = user.email ? String(user.email).trim().toLowerCase() : null;
   const emailVerified = user.emailVerified === true;
@@ -163,15 +184,23 @@ function buildCompleteUserProfile(user, currentUserId = null) {
   return {
     itemType: 'USER',
     userId: user.userId || user.id || user._id || null,
+    id: user.userId || user.id || user._id || null,
+    user_id: user.userId || user.id || user._id || null,
     userName: displayName,
+    name: displayName,
+    displayName: displayName,
     email: user.email || null,
     normalizedEmail,
     emailVerified,
     emailVerifiedAt,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
+    avatarUrl: profileImageUrl,
+    avatar_url: profileImageUrl,
     profileImagePath,
+    profile_image_path: profileImagePath,
     profileImageUrl,
+    profile_image_url: profileImageUrl,
     displayImagePath: profileImagePath,
     display_image_path: profileImagePath,
     displayImageUrl: profileImageUrl,
@@ -1977,11 +2006,15 @@ app.post('/friends/request/:requestId/cancel', async (req, res) => {
       if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
     }
 
+    const requestUserMap = new Map();
+    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
+    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
+
     return res.status(200).json({
       success: true,
       message: 'Friend request canceled',
       request: canceledPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId),
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId, requestUserMap),
     });
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
@@ -2086,11 +2119,15 @@ app.post('/friends/add', async (req, res) => {
       userCache.set(userId, updatedCurrentUser);
     }
 
+    const requestUserMap = new Map();
+    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
+    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
+
     return res.status(201).json({
       success: true,
       message: 'Friend request sent',
       request: senderResponsePayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId),
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId, requestUserMap),
     });
   } catch (err) {
     Logger.error('friends/add', 'Error sending friend request', err.message);
@@ -2223,6 +2260,10 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
     }
 
+    const requestUserMap = new Map();
+    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
+    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
+
     // ✅ OPTIMIZATION: Return updated friend list so frontend can immediately show new friend
     const updatedFriendIds = await listFriendsForUser(userId);
     const friendIds = updatedFriendIds.map((id) => normalizeId(id)).filter(Boolean);
@@ -2263,7 +2304,7 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       success: true,
       message: 'Friend request accepted',
       request: responseRequestPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId) || buildCompleteUserProfile(recipientUser, userId),
+      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId, requestUserMap) || buildCompleteUserProfile(recipientUser, userId, requestUserMap),
       newFriend: recipientNewFriendPayload || senderNewFriendPayload,
       updatedFriendsList,
     });
@@ -2366,11 +2407,15 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
       if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
     }
 
+    const requestUserMap = new Map();
+    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
+    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
+
     return res.status(200).json({
       success: true,
       message: 'Friend request denied',
       request: responseRequestPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || recipientUser, userId),
+      currentUser: buildCompleteUserProfile(updatedCurrentUser || recipientUser, userId, requestUserMap),
     });
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
