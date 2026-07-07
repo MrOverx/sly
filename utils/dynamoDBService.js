@@ -601,8 +601,9 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
     });
 
     if (existingIndex >= 0) {
-      nextEntries[existingIndex] = {
-        ...nextEntries[existingIndex],
+      const existingRequest = nextEntries[existingIndex] || {};
+      const mergedRequest = {
+        ...existingRequest,
         ...reference,
         requestId,
         userId: reference.userId,
@@ -610,6 +611,10 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
         recipientId: reference.recipientId,
         friendId: reference.friendId,
       };
+      if (existingRequest.To && !reference.To) mergedRequest.To = existingRequest.To;
+      if (existingRequest.sender && !reference.sender) mergedRequest.sender = existingRequest.sender;
+      if (existingRequest.recipient && !reference.recipient) mergedRequest.recipient = existingRequest.recipient;
+      nextEntries[existingIndex] = mergedRequest;
     } else {
       nextEntries.push(reference);
     }
@@ -628,8 +633,9 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
   });
 
   if (existingIndex >= 0) {
-    nextRequests[existingIndex] = {
-      ...nextRequests[existingIndex],
+    const existingRequest = nextRequests[existingIndex] || {};
+    const mergedRequest = {
+      ...existingRequest,
       ...reference,
       requestId,
       userId: reference.userId,
@@ -637,6 +643,10 @@ function mergeFriendRequestReference(existingRequests = [], requestItem, status 
       recipientId: reference.recipientId,
       friendId: reference.friendId,
     };
+    if (existingRequest.To && !reference.To) mergedRequest.To = existingRequest.To;
+    if (existingRequest.sender && !reference.sender) mergedRequest.sender = existingRequest.sender;
+    if (existingRequest.recipient && !reference.recipient) mergedRequest.recipient = existingRequest.recipient;
+    nextRequests[existingIndex] = mergedRequest;
     return nextRequests;
   }
 
@@ -801,6 +811,9 @@ function serializeFriendRequestForClient(request, currentUserId, senderUser = nu
     notificationUserAvatarLetter: String(fromUserName || fromUserId).isNotEmpty
       ? String(fromUserName || fromUserId).charAt(0).toUpperCase()
       : 'U',
+    userName: fromUserName,
+    name: fromUserName,
+    displayName: fromUserName,
   };
 
   // Add new compatible friend-request payload fields
