@@ -511,13 +511,23 @@ function normalizeFriendRequestItem(item) {
 }
 
 function normalizeFriendRequestEntries(entries) {
-  if (!Array.isArray(entries)) return [];
-  return entries.filter(Boolean).map((entry) => {
-    if (!entry || typeof entry !== 'object') {
-      return { requestId: String(entry), status: 'pending' };
-    }
-    return entry;
-  });
+  if (!entries) return [];
+  if (Array.isArray(entries)) {
+    return entries.filter(Boolean).map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return { requestId: String(entry), status: 'pending' };
+      }
+      return entry;
+    });
+  }
+
+  if (isObjectFriendRequests(entries)) {
+    const sent = Array.isArray(entries.sent) ? entries.sent.filter(Boolean) : [];
+    const received = Array.isArray(entries.received) ? entries.received.filter(Boolean) : [];
+    return [...sent, ...received];
+  }
+
+  return [];
 }
 
 function isObjectFriendRequests(value) {
@@ -2379,6 +2389,7 @@ module.exports = {
   countFriendsForUser,
   getUsersByIds,
   getActiveBlock,
+  normalizeFriendRequestEntries,
   mergeFriendRequestReference,
   removeFriendRequestReference,
   mergeFriendList,

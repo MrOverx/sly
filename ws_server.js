@@ -74,6 +74,7 @@ const {
   getFriendRequestBetweenUsers,
   updateFriendRequestStatus,
   acceptFriendRequestTransaction,
+  normalizeFriendRequestEntries,
   serializeFriendRequestForClient,
   serializeFriendForClient,
   deleteFriendRequest,
@@ -138,16 +139,6 @@ function normalizeFriendReferences(friends) {
   return friends
     .map(normalizeFriendReference)
     .filter((item) => item && item.friendId);
-}
-
-function normalizeFriendRequestEntries(entries) {
-  if (Array.isArray(entries)) return entries.filter(Boolean);
-  if (entries && typeof entries === 'object') {
-    const sent = Array.isArray(entries.sent) ? entries.sent.filter(Boolean) : [];
-    const received = Array.isArray(entries.received) ? entries.received.filter(Boolean) : [];
-    return [...sent, ...received];
-  }
-  return [];
 }
 
 function buildCompleteUserProfile(user, currentUserId = null, requestUserMap = new Map()) {
