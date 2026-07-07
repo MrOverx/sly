@@ -1654,7 +1654,10 @@ async function createFriendRequest(userId, friendId, requestMetadata = {}) {
       return updatedExisting;
     }
 
-    const item = buildFriendItem(userId, friendId, 'pending');
+    // ✅ Build FRIEND item with rich metadata (To, RequestType, isRead, etc.)
+    const basicItem = buildFriendItem(userId, friendId, 'pending');
+    const richReference = buildFriendRequestReference(basicItem, 'pending', userId, requestMetadata);
+    const item = { ...basicItem, ...richReference };  // Merge basic item with rich metadata
     if (!TABLE_HAS_SORT_KEY) delete item.SK;
     upsertDevStoreItem(item);
     await Promise.all([
@@ -1664,7 +1667,10 @@ async function createFriendRequest(userId, friendId, requestMetadata = {}) {
     return item;
   }
 
-  const item = buildFriendItem(userId, friendId, 'pending');
+  // ✅ Build FRIEND item with rich metadata (To, RequestType, isRead, etc.)
+  const basicItem = buildFriendItem(userId, friendId, 'pending');
+  const richReference = buildFriendRequestReference(basicItem, 'pending', userId, requestMetadata);
+  const item = { ...basicItem, ...richReference };  // Merge basic item with rich metadata
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   await Promise.all([
     persistFriendRequestOnUser(userId, item, 'pending', requestMetadata),
@@ -1683,7 +1689,12 @@ async function updateFriendRequestStatus(userId, friendId, status, requestMetada
     const index = items.findIndex((item) => String(item.userId) === String(userId) && String(item.friendId) === String(friendId));
     if (index === -1) return null;
 
-    const updated = normalizeFriendRequestItem({ ...items[index], status, updatedAt: new Date().toISOString() });
+    // ✅ Preserve all existing FRIEND item fields when updating status
+    const updated = normalizeFriendRequestItem({
+      ...items[index],  // Spread all existing fields first
+      status,
+      updatedAt: new Date().toISOString(),
+    });
     items[index] = updated;
     upsertDevStoreItem(updated);
     await Promise.all([
@@ -1693,7 +1704,12 @@ async function updateFriendRequestStatus(userId, friendId, status, requestMetada
     return updated;
   }
 
-  const updated = normalizeFriendRequestItem({ ...current, status, updatedAt: new Date().toISOString() });
+  // ✅ Preserve all existing FRIEND item fields when updating status
+  const updated = normalizeFriendRequestItem({
+    ...current,  // Spread all existing fields first
+    status,
+    updatedAt: new Date().toISOString(),
+  });
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: updated }));
   await Promise.all([
     persistFriendRequestOnUser(userId, updated, status, requestMetadata),
