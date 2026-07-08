@@ -259,7 +259,7 @@ function normalizeAuthType(value) {
   const authType = String(value).trim();
   if (!authType) return null;
   const normalized = authType.toUpperCase();
-  const allowedTypes = ['GOOGLE_OAUTH', 'MAIL', 'LOCAL', 'GUEST'];
+  const allowedTypes = ['MAIL', 'LOCAL', 'GUEST'];
   return allowedTypes.includes(normalized) ? normalized : null;
 }
 
@@ -345,6 +345,11 @@ function sanitizeUserUpdates(updates = {}) {
     // Prevent callers from explicitly setting `updatedAt` — this is managed
     // by the persistence layer to avoid UpdateExpression conflicts.
     if (field === 'updatedAt') return;
+
+    if (field === 'friendRequests') {
+      sanitized[field] = normalizeFriendRequestEntries(value);
+      return;
+    }
 
     // Normalize Date-like values to ISO strings so DynamoDB marshalling
     // doesn't receive raw Date instances which cause errors.
@@ -440,9 +445,7 @@ function buildUserItem(user) {
               .filter(Boolean)
           : []),
     friends: Array.isArray(user.friends) ? user.friends : [],
-    friendRequests: user.friendRequests && (Array.isArray(user.friendRequests) || isObjectFriendRequests(user.friendRequests))
-      ? user.friendRequests
-      : [],
+    friendRequests: normalizeFriendRequestEntries(user.friendRequests),
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
     createdAt,
     updatedAt,
@@ -773,7 +776,10 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
   const existingRequests = Array.isArray(currentUser?.friendRequests) || isObjectFriendRequests(currentUser?.friendRequests)
     ? currentUser.friendRequests
     : [];
-  const nextRequests = mergeFriendRequestReference(existingRequests, requestItem, status, userId, requestMetadata);
+  const shouldRemoveFromUser = ['accepted', 'denied'].includes(String(status || '').toLowerCase());
+  const nextRequests = shouldRemoveFromUser
+    ? removeFriendRequestReference(existingRequests, requestItem, userId)
+    : mergeFriendRequestReference(existingRequests, requestItem, status, userId, requestMetadata);
 
   // ✅ IMPORTANT: Always pass the complete user profile when updating to preserve all user fields
   // This prevents data loss when persisting friend request changes.
@@ -1748,12 +1754,14 @@ async function removeFriendRequestReferenceFromUser(userId, requestItem) {
 
   const nextFriends = Array.isArray(currentUser.friends) ? currentUser.friends : [];
   const nextFriendIds = Array.isArray(currentUser.friendIds) ? currentUser.friendIds : [];
+  const nextRequests = removeFriendRequestReference(currentUser?.friendRequests || [], requestItem, userId);
 
   // ✅ IMPORTANT: Always pass the complete user profile when updating to preserve all user fields
   return updateUserById(userId, {
     ...currentUser,  // Spread all existing user fields first
     friends: nextFriends,  // Then override only the fields we're changing
     friendIds: nextFriendIds,
+    friendRequests: nextRequests,
     updatedAt: new Date().toISOString(),
   });
 }

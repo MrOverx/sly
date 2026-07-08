@@ -2156,23 +2156,8 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
       return sendError(res, 400, 'Friend request is no longer pending');
     }
 
-    // Atomically accept the friend request and create friendship records
-    const updatedRequest = await acceptFriendRequestTransaction(friendRequest, { senderUser, recipientUser }).catch((e) => {
-      Logger.error('friends/request/accept', 'Transaction failed', e && e.message);
-      throw e;
-    });
-
-    if (!updatedRequest || String(updatedRequest.status || '').toLowerCase() !== 'accepted') {
-      Logger.error('friends/request/accept', 'Failed to accept friend request in transaction', { userId, requestId });
-      return sendError(res, 500, 'Failed to accept friend request');
-    }
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendRequest.userId);
-
-    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
-
-    // Get updated user data with complete profile (parallelize fetches)
+    // Fetch sender/recipient profiles (from cache or DB) so we can include
+    // rich profile snapshots in the transaction (used for notifications).
     let senderUser = userCache.get(friendRequest.userId);
     let recipientUser = userCache.get(friendRequest.friendId);
     const toFetch = [];
@@ -2192,6 +2177,24 @@ app.post('/friends/request/:requestId/accept', async (req, res) => {
         }
       }
     }
+
+    // Atomically accept the friend request and create friendship records
+    const updatedRequest = await acceptFriendRequestTransaction(friendRequest, { senderUser, recipientUser }).catch((e) => {
+      Logger.error('friends/request/accept', 'Transaction failed', e && e.message);
+      throw e;
+    });
+
+    if (!updatedRequest || String(updatedRequest.status || '').toLowerCase() !== 'accepted') {
+      Logger.error('friends/request/accept', 'Failed to accept friend request in transaction', { userId, requestId });
+      return sendError(res, 500, 'Failed to accept friend request');
+    }
+
+    userCache.invalidate(userId);
+    userCache.invalidate(friendRequest.userId);
+
+    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
+
+    // senderUser and recipientUser were fetched earlier and may be present here
 
     // Emit socket events with normalized friend request payload to the sender
     const senderSocketId = userSockets.get(friendRequest.userId);
@@ -2335,7 +2338,27 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
       return sendError(res, 400, 'Friend request is no longer pending');
     }
 
-    // Update request status to denied
+    // Fetch sender/recipient profiles to include in persisted request metadata
+    let senderUser = userCache.get(friendRequest.userId);
+    let recipientUser = userCache.get(friendRequest.friendId);
+    const toFetch2 = [];
+    if (!senderUser) toFetch2.push({ id: friendRequest.userId, key: friendRequest.userId, as: 'sender' });
+    if (!recipientUser) toFetch2.push({ id: friendRequest.friendId, key: friendRequest.friendId, as: 'recipient' });
+    if (toFetch2.length > 0) {
+      const promises2 = toFetch2.map((t) => getUserById(t.id));
+      const fetched2 = await Promise.all(promises2);
+      for (let idx = 0; idx < fetched2.length; idx++) {
+        const t = toFetch2[idx];
+        const u = fetched2[idx];
+        if (u) {
+          userCache.set(t.key, u);
+          if (t.as === 'sender') senderUser = u;
+          if (t.as === 'recipient') recipientUser = u;
+        }
+      }
+    }
+
+    // Update request status to denied, include profile metadata
     const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'denied', { senderUser, recipientUser });
 
     userCache.invalidate(userId);
@@ -2364,18 +2387,7 @@ app.post('/friends/request/:requestId/deny', async (req, res) => {
     } catch (e) {
       Logger.warn('friends/request/deny', 'Failed to emit pending_requests_updated', e && e.message);
     }
-    // Get updated user data
-    let senderUser = userCache.get(friendRequest.userId);
-    if (!senderUser) {
-      senderUser = await getUserById(friendRequest.userId);
-      if (senderUser) userCache.set(friendRequest.userId, senderUser);
-    }
-
-    let recipientUser = userCache.get(friendRequest.friendId);
-    if (!recipientUser) {
-      recipientUser = await getUserById(friendRequest.friendId);
-      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
-    }
+    // senderUser and recipientUser were already fetched above for metadata
 
     // Emit socket event to sender with normalized request payload
     const senderSocketId = userSockets.get(friendRequest.userId);
