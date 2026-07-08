@@ -10,27 +10,19 @@ function buildFriendRequestPayload(request = {}) {
   const targetUserId = receiverId || normalizeIdValue(request.targetUserId || '');
   const normalized = {
     requestId,
-    id: requestId,
     status: request.status || 'pending',
     createdAt: request.createdAt || request.timestamp || null,
     senderId,
     receiverId,
-    recipientId: receiverId,
-    userId: senderId,
-    targetUserId,
     requestType: request.requestType || 'FRIEND_REQUEST_OUTGOING',
     isRead: Boolean(request.isRead),
-    isReadByReceiver: Boolean(request.isReadByReceiver),
     isIncoming: Boolean(request.isIncoming),
-    isOutgoing: !Boolean(request.isIncoming),
     sender: request.sender || null,
     receiver: request.receiver || request.to || null,
-    to: request.to || request.receiver || null,
   };
 
   if (!normalized.requestId && senderId && targetUserId) {
     normalized.requestId = `${senderId}|${targetUserId}`;
-    normalized.id = normalized.requestId;
   }
 
   return normalized;

@@ -42,35 +42,25 @@
     "xp": {},
     "likedUserIds": [],
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-07-08T16:17:01.805Z",
-    "updatedAt": "2026-07-08T16:17:01.818Z",
-    "lastLogin": "2026-07-08T16:17:01.805Z",
+    "createdAt": "2026-07-08T16:43:59.936Z",
+    "updatedAt": "2026-07-08T16:43:59.949Z",
+    "lastLogin": "2026-07-08T16:43:59.936Z",
     "normalizedEmail": "sender@example.com",
     "emailLower": "sender@example.com",
     "friendRequests": [
       {
         "requestId": "sender-1|recipient-1",
         "status": "pending",
-        "createdAt": "2026-07-08T16:17:01.815Z",
-        "updatedAt": "2026-07-08T16:17:01.815Z",
+        "createdAt": "2026-07-08T16:43:59.945Z",
         "senderId": "sender-1",
-        "receiverId": "recipient-1",
-        "recipientId": "recipient-1",
-        "userId": "sender-1",
-        "targetUserId": "recipient-1",
         "requestType": "FRIEND_REQUEST_OUTGOING",
         "isRead": false,
-        "isReadByReceiver": false,
         "isIncoming": false,
         "sender": {
           "userId": "sender-1",
           "userName": "sender"
         },
         "receiver": {
-          "userId": "recipient-1",
-          "userName": "recipient"
-        },
-        "to": {
           "userId": "recipient-1",
           "userName": "recipient"
         }
@@ -120,35 +110,25 @@
     "xp": {},
     "likedUserIds": [],
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-07-08T16:17:01.814Z",
-    "updatedAt": "2026-07-08T16:17:01.820Z",
-    "lastLogin": "2026-07-08T16:17:01.814Z",
+    "createdAt": "2026-07-08T16:43:59.944Z",
+    "updatedAt": "2026-07-08T16:43:59.950Z",
+    "lastLogin": "2026-07-08T16:43:59.944Z",
     "normalizedEmail": "recipient@example.com",
     "emailLower": "recipient@example.com",
     "friendRequests": [
       {
         "requestId": "sender-1|recipient-1",
         "status": "pending",
-        "createdAt": "2026-07-08T16:17:01.815Z",
-        "updatedAt": "2026-07-08T16:17:01.815Z",
+        "createdAt": "2026-07-08T16:43:59.945Z",
         "senderId": "sender-1",
-        "receiverId": "recipient-1",
-        "recipientId": "recipient-1",
-        "userId": "sender-1",
-        "targetUserId": "recipient-1",
         "requestType": "FRIEND_REQUEST_INCOMING",
         "isRead": false,
-        "isReadByReceiver": false,
         "isIncoming": true,
         "sender": {
           "userId": "sender-1",
           "userName": "sender"
         },
         "receiver": {
-          "userId": "recipient-1",
-          "userName": "recipient"
-        },
-        "to": {
           "userId": "recipient-1",
           "userName": "recipient"
         }

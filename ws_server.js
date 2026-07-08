@@ -1894,13 +1894,15 @@ app.post('/friends/add', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to recipient
     notifyUserOfFriendEvent(friendId, 'friend_request_received', {
-      requestId: request.requestId,
-      from: {
-        userId: senderUser.userId,
-        userName: senderUser.userName,
-        avatarColor: senderUser.avatarColor,
-      },
-      createdAt: request.createdAt,
+      request: buildFriendRequestPayload({
+        ...request,
+        sender: buildFriendCompleteUserProfile(senderUser),
+        receiver: buildFriendCompleteUserProfile(recipientUser),
+      }),
+      currentUser: buildFriendCompleteUserProfile(recipientUser),
+      friend: buildFriendCompleteUserProfile(senderUser),
+      sender: buildFriendCompleteUserProfile(senderUser),
+      recipient: buildFriendCompleteUserProfile(recipientUser),
     });
 
     const shapedRequest = buildFriendRequestPayload(request);
@@ -1970,13 +1972,15 @@ app.post('/friends/request/send', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to recipient if online
     notifyUserOfFriendEvent(targetUserId, 'friend_request_received', {
-      requestId: request.requestId,
-      from: {
-        userId: senderUser.userId,
-        userName: senderUser.userName,
-        avatarColor: senderUser.avatarColor,
-      },
-      createdAt: request.createdAt,
+      request: buildFriendRequestPayload({
+        ...request,
+        sender: buildFriendCompleteUserProfile(senderUser),
+        receiver: buildFriendCompleteUserProfile(recipientUser),
+      }),
+      currentUser: buildFriendCompleteUserProfile(recipientUser),
+      friend: buildFriendCompleteUserProfile(senderUser),
+      sender: buildFriendCompleteUserProfile(senderUser),
+      recipient: buildFriendCompleteUserProfile(recipientUser),
     });
 
     const shapedRequest = buildFriendRequestPayload(request);
@@ -2039,12 +2043,15 @@ app.post('/friends/request/accept', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to sender
     notifyUserOfFriendEvent(userId, 'friend_request_accepted', {
-      from: {
-        userId: targetUserId,
-        userName: updatedUser?.userName,
-        avatarColor: updatedUser?.avatarColor,
-      },
-      acceptedAt: new Date().toISOString(),
+      request: buildFriendRequestPayload({
+        ...request,
+        status: 'accepted',
+        sender: buildFriendCompleteUserProfile(senderUser),
+        receiver: buildFriendCompleteUserProfile(updatedUser),
+      }),
+      currentUser: buildFriendCompleteUserProfile(senderUser),
+      friend: buildFriendCompleteUserProfile(updatedUser),
+      newFriend: buildFriendCompleteUserProfile(updatedUser),
     });
 
     const shapedCurrentUser = buildFriendCompleteUserProfile(updatedUser);
@@ -2093,8 +2100,18 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to sender
     notifyUserOfFriendEvent(userId, 'friend_request_denied', {
-      to: targetUserId,
-      deniedAt: new Date().toISOString(),
+      request: buildFriendRequestPayload({
+        requestId: `${userId}|${targetUserId}`,
+        status: 'denied',
+        senderId: userId,
+        receiverId: targetUserId,
+        requestType: 'FRIEND_REQUEST_DENIED',
+        isIncoming: false,
+        sender: buildFriendCompleteUserProfile(await getUserById(userId)),
+        receiver: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      }),
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      friend: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
     });
 
     return sendSuccess(res, {
@@ -2138,8 +2155,18 @@ app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to recipient
     notifyUserOfFriendEvent(targetUserId, 'friend_request_cancelled', {
-      from: userId,
-      cancelledAt: new Date().toISOString(),
+      request: buildFriendRequestPayload({
+        requestId: `${userId}|${targetUserId}`,
+        status: 'cancelled',
+        senderId: userId,
+        receiverId: targetUserId,
+        requestType: 'FRIEND_REQUEST_CANCELLED',
+        isIncoming: false,
+        sender: buildFriendCompleteUserProfile(await getUserById(userId)),
+        receiver: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      }),
+      currentUser: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      friend: buildFriendCompleteUserProfile(await getUserById(userId)),
     });
 
     return sendSuccess(res, {
@@ -2182,8 +2209,9 @@ app.post('/friends/remove', asyncHandler(async (req, res) => {
 
     // 📱 Emit real-time notification to removed friend
     notifyUserOfFriendEvent(friendId, 'friend_removed', {
-      by: userId,
-      removedAt: new Date().toISOString(),
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      friend: buildFriendCompleteUserProfile(await getUserById(friendId)),
+      removedFriendId: friendId,
     });
 
     const updatedUser = await getUserById(userId);

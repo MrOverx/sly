@@ -1266,19 +1266,12 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
     requestId,
     status: 'pending',
     createdAt: now,
-    updatedAt: now,
     senderId: userId,
-    receiverId: targetUserId,
-    recipientId: targetUserId,
-    userId,
-    targetUserId,
     requestType: 'FRIEND_REQUEST_OUTGOING',
     isRead: false,
-    isReadByReceiver: false,
     isIncoming: false,
     sender: senderProfile,
     receiver: recipientProfile,
-    to: recipientProfile,
   };
 
   const incomingRequest = {
@@ -1287,9 +1280,6 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
     isIncoming: true,
     sender: senderProfile,
     receiver: recipientProfile,
-    to: recipientProfile,
-    recipientId: targetUserId,
-    receiverId: targetUserId,
   };
 
   const sender = await getUserById(userId);
@@ -1340,10 +1330,10 @@ async function queryFriendRequestsForUser(userId, direction = 'incoming') {
 
   const requests = Array.isArray(user.friendRequests) ? user.friendRequests : [];
   if (direction === 'incoming') {
-    return requests.filter((item) => item && String(item.receiverId || item.recipientId || item.targetUserId || item.to?.userId || '') === String(userId) && String(item.status).toLowerCase() === 'pending');
+    return requests.filter((item) => item && String(item.requestType || '').toUpperCase().includes('INCOMING') && String(item.status).toLowerCase() === 'pending');
   }
 
-  return requests.filter((item) => item && String(item.senderId || item.userId) === String(userId) && String(item.status).toLowerCase() === 'pending');
+  return requests.filter((item) => item && String(item.requestType || '').toUpperCase().includes('OUTGOING') && String(item.status).toLowerCase() === 'pending');
 }
 
 async function acceptFriendRequest(userId, targetUserId) {
@@ -1359,17 +1349,17 @@ async function acceptFriendRequest(userId, targetUserId) {
   const recipientRequests = Array.isArray(recipient.friendRequests) ? recipient.friendRequests : [];
 
   const nextSenderRequests = senderRequests.map((request) => {
-    if (String(request.requestId || '') !== requestId && String(request.senderId || request.userId || '') !== String(userId)) {
+    if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'accepted', updatedAt: now };
+    return { ...request, status: 'accepted', isRead: Boolean(request.isRead) };
   });
 
   const nextRecipientRequests = recipientRequests.map((request) => {
-    if (String(request.requestId || '') !== requestId && String(request.senderId || request.userId || '') !== String(userId)) {
+    if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'accepted', updatedAt: now };
+    return { ...request, status: 'accepted', isRead: Boolean(request.isRead) };
   });
 
   const senderFriends = Array.isArray(sender.friends) ? sender.friends : [];
