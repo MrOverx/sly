@@ -37,6 +37,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
   DynamoDBDocumentClient = null;
 }
 const { Logger } = require('./logger');
+const { normalizeProfileImageReference, resolveProfileImageReference } = require('./friendPayloadUtils');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -395,6 +396,44 @@ function buildUserItem(user) {
           : 'LOCAL');
 
   const displayName = user.userName || user.name || user.displayName || 'User';
+  const normalizedFriendRequests = Array.isArray(user.friendRequests)
+    ? user.friendRequests.map((request) => {
+        const senderId = request.senderId || request.userId || request.fromUserId || '';
+        const receiverId = request.receiverId || request.recipientId || request.targetUserId || request.toUserId || '';
+        const sender = request.sender && typeof request.sender === 'object' ? request.sender : null;
+        const receiver = request.receiver && typeof request.receiver === 'object'
+          ? request.receiver
+          : (request.to && typeof request.to === 'object' ? request.to : null);
+        const senderProfileImageUrl = resolveProfileImageReference(sender);
+        const receiverProfileImageUrl = resolveProfileImageReference(receiver);
+        return {
+          ...request,
+          requestId: request.requestId || request.id || `${senderId}|${receiverId}`,
+          status: request.status || 'pending',
+          senderId,
+          receiverId,
+          sender: sender
+            ? {
+                ...sender,
+                userId: sender.userId || sender.id || senderId || null,
+                id: sender.id || sender.userId || senderId || null,
+                profileImageUrl: senderProfileImageUrl,
+                profile_image_url: senderProfileImageUrl,
+              }
+            : (senderId ? { userId: senderId, id: senderId, profileImageUrl: null, profile_image_url: null } : null),
+          receiver: receiver
+            ? {
+                ...receiver,
+                userId: receiver.userId || receiver.id || receiverId || null,
+                id: receiver.id || receiver.userId || receiverId || null,
+                profileImageUrl: receiverProfileImageUrl,
+                profile_image_url: receiverProfileImageUrl,
+              }
+            : (receiverId ? { userId: receiverId, id: receiverId, profileImageUrl: null, profile_image_url: null } : null),
+        };
+      })
+    : [];
+
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
     ...user,
@@ -422,6 +461,8 @@ function buildUserItem(user) {
     isOnline: Boolean(user.isOnline),
     ...buildProfileImageFields(user),
     pictureName: user.pictureName || null,
+    friendRequests: normalizedFriendRequests,
+    pendingFriendRequests: normalizedFriendRequests.filter((request) => String(request.status || '').trim().toLowerCase() === 'pending'),
     passwordHash: user.passwordHash || null,
     emailVerified: Boolean(user.emailVerified),
     emailVerifiedAt,
@@ -1259,8 +1300,16 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
 
   const requestId = `${normalizeIdValue(userId)}|${normalizeIdValue(targetUserId)}`;
   const now = new Date().toISOString();
-  const senderProfile = metadata.senderProfile || { userId, userName: metadata.userName || userId };
-  const recipientProfile = metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId };
+  const senderProfile = {
+    ...(metadata.senderProfile || { userId, userName: metadata.userName || userId }),
+    profileImageUrl: normalizeProfileImageReference((metadata.senderProfile || {}).profileImageUrl || (metadata.senderProfile || {}).profile_image_url || (metadata.senderProfile || {}).avatarUrl || (metadata.senderProfile || {}).avatar_url || null),
+    profile_image_url: normalizeProfileImageReference((metadata.senderProfile || {}).profileImageUrl || (metadata.senderProfile || {}).profile_image_url || (metadata.senderProfile || {}).avatarUrl || (metadata.senderProfile || {}).avatar_url || null),
+  };
+  const recipientProfile = {
+    ...(metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId }),
+    profileImageUrl: normalizeProfileImageReference((metadata.recipientProfile || {}).profileImageUrl || (metadata.recipientProfile || {}).profile_image_url || (metadata.recipientProfile || {}).avatarUrl || (metadata.recipientProfile || {}).avatar_url || null),
+    profile_image_url: normalizeProfileImageReference((metadata.recipientProfile || {}).profileImageUrl || (metadata.recipientProfile || {}).profile_image_url || (metadata.recipientProfile || {}).avatarUrl || (metadata.recipientProfile || {}).avatar_url || null),
+  };
 
   const outgoingRequest = {
     requestId,
@@ -1395,12 +1444,22 @@ async function denyFriendRequest(userId, targetUserId) {
   const recipient = await getUserById(targetUserId);
   if (!sender || !recipient) return false;
 
-  const nextSenderRequests = (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).filter((request) => String(request.requestId || '') !== requestId);
-  const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).filter((request) => String(request.requestId || '') !== requestId);
+  const nextSenderRequests = (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).map((request) => {
+    if (String(request.requestId || '') !== requestId) {
+      return request;
+    }
+    return { ...request, status: 'rejected', isRead: Boolean(request.isRead) };
+  });
+  const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).map((request) => {
+    if (String(request.requestId || '') !== requestId) {
+      return request;
+    }
+    return { ...request, status: 'rejected', isRead: Boolean(request.isRead) };
+  });
 
   await updateUserById(userId, { friendRequests: nextSenderRequests });
   await updateUserById(targetUserId, { friendRequests: nextRecipientRequests });
-  return true;
+  return { requestId, status: 'rejected' };
 }
 
 async function removeFriend(userId, friendId) {

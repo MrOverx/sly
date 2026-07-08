@@ -1,6 +1,62 @@
 function normalizeIdValue(value) {
   if (value === undefined || value === null) return '';
-  return String(value).trim();
+  try {
+    return String(value).trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+function normalizeProfileImageReference(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const lowered = trimmed.toLowerCase();
+    if (['null', 'undefined', 'none', 'nil', 'nan', '(null)', 'nullvalue'].includes(lowered)) {
+      return null;
+    }
+    return trimmed;
+  }
+  return value;
+}
+
+function resolveProfileImageReference(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  const candidates = [
+    profile.profileImageUrl,
+    profile.profile_image_url,
+    profile.avatarUrl,
+    profile.avatar_url,
+    profile.profileImagePath,
+    profile.profile_image_path,
+    profile.displayImageUrl,
+    profile.display_image_url,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeProfileImageReference(candidate);
+    if (normalized !== null) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function normalizeFriendRequestStatus(rawStatus) {
+  const normalized = String(rawStatus ?? '').trim().toLowerCase();
+  if (!normalized) return 'pending';
+  if (['accepted', 'approved', 'accept', 'confirmed'].includes(normalized)) {
+    return 'accepted';
+  }
+  if (['rejected', 'denied', 'declined', 'reject'].includes(normalized)) {
+    return 'rejected';
+  }
+  if (['cancelled', 'canceled'].includes(normalized)) {
+    return 'cancelled';
+  }
+  return normalized;
 }
 
 function buildFriendRequestPayload(request = {}) {
@@ -8,17 +64,39 @@ function buildFriendRequestPayload(request = {}) {
   const senderId = normalizeIdValue(request.senderId || request.userId || request.fromUserId || '');
   const receiverId = normalizeIdValue(request.receiverId || request.recipientId || request.targetUserId || request.toUserId || '');
   const targetUserId = receiverId || normalizeIdValue(request.targetUserId || '');
+  const senderProfile = request.sender && typeof request.sender === 'object' ? request.sender : null;
+  const receiverProfile = request.receiver && typeof request.receiver === 'object'
+    ? request.receiver
+    : (request.to && typeof request.to === 'object' ? request.to : null);
+  const senderProfileImageUrl = resolveProfileImageReference(senderProfile);
+  const receiverProfileImageUrl = resolveProfileImageReference(receiverProfile);
   const normalized = {
     requestId,
-    status: request.status || 'pending',
+    status: normalizeFriendRequestStatus(request.status),
     createdAt: request.createdAt || request.timestamp || null,
     senderId,
     receiverId,
     requestType: request.requestType || 'FRIEND_REQUEST_OUTGOING',
     isRead: Boolean(request.isRead),
     isIncoming: Boolean(request.isIncoming),
-    sender: request.sender || null,
-    receiver: request.receiver || request.to || null,
+    sender: senderProfile
+      ? {
+          ...senderProfile,
+          userId: senderProfile.userId || senderProfile.id || senderId || null,
+          id: senderProfile.id || senderProfile.userId || senderId || null,
+          profileImageUrl: senderProfileImageUrl,
+          profile_image_url: senderProfileImageUrl,
+        }
+      : (senderId ? { userId: senderId, id: senderId, profileImageUrl: null, profile_image_url: null } : null),
+    receiver: receiverProfile
+      ? {
+          ...receiverProfile,
+          userId: receiverProfile.userId || receiverProfile.id || receiverId || null,
+          id: receiverProfile.id || receiverProfile.userId || receiverId || null,
+          profileImageUrl: receiverProfileImageUrl,
+          profile_image_url: receiverProfileImageUrl,
+        }
+      : (receiverId ? { userId: receiverId, id: receiverId, profileImageUrl: null, profile_image_url: null } : null),
   };
 
   if (!normalized.requestId && senderId && targetUserId) {
@@ -42,16 +120,16 @@ function buildCompleteUserProfile(user) {
     email: user.email || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || null,
-    avatarUrl: user.profileImageUrl || user.profileImagePath || null,
-    avatar_url: user.profileImageUrl || user.profileImagePath || null,
-    profileImagePath: user.profileImagePath || user.profileImageUrl || null,
-    profile_image_path: user.profileImagePath || user.profileImageUrl || null,
-    profileImageUrl: user.profileImageUrl || user.profileImagePath || null,
-    profile_image_url: user.profileImageUrl || user.profileImagePath || null,
-    displayImagePath: user.profileImagePath || user.profileImageUrl || null,
-    display_image_path: user.profileImagePath || user.profileImageUrl || null,
-    displayImageUrl: user.profileImageUrl || user.profileImagePath || null,
-    display_image_url: user.profileImageUrl || user.profileImagePath || null,
+    avatarUrl: resolveProfileImageReference(user),
+    avatar_url: resolveProfileImageReference(user),
+    profileImagePath: resolveProfileImageReference(user),
+    profile_image_path: resolveProfileImageReference(user),
+    profileImageUrl: resolveProfileImageReference(user),
+    profile_image_url: resolveProfileImageReference(user),
+    displayImagePath: resolveProfileImageReference(user),
+    display_image_path: resolveProfileImageReference(user),
+    displayImageUrl: resolveProfileImageReference(user),
+    display_image_url: resolveProfileImageReference(user),
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
     birthDate: user.birthDate || null,
@@ -78,7 +156,7 @@ function buildCompleteUserProfile(user) {
       : [],
     pendingFriendRequests: Array.isArray(user.friendRequests)
       ? user.friendRequests
-          .filter((request) => String(request.status || '').toLowerCase() === 'pending')
+          .filter((request) => normalizeFriendRequestStatus(request.status) === 'pending')
           .map((request) => buildFriendRequestPayload(request))
       : [],
     createdAt: user.createdAt || null,
@@ -89,6 +167,9 @@ function buildCompleteUserProfile(user) {
 }
 
 module.exports = {
+  normalizeFriendRequestStatus,
+  normalizeProfileImageReference,
+  resolveProfileImageReference,
   buildFriendRequestPayload,
   buildCompleteUserProfile,
 };

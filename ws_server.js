@@ -117,8 +117,10 @@ function buildCompleteUserProfile(user) {
   const normalizedEmail = user.email ? String(user.email).trim().toLowerCase() : null;
   const emailVerified = user.emailVerified === true;
   const emailVerifiedAt = normalizeIsoTimestamp(user.emailVerifiedAt);
+  const baseProfile = buildFriendCompleteUserProfile(user) || {};
 
   return {
+    ...baseProfile,
     itemType: 'USER',
     userId: user.userId || user.id || user._id || null,
     id: user.userId || user.id || user._id || null,
@@ -169,7 +171,7 @@ function buildCompleteUserProfile(user) {
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
-const { buildFriendRequestPayload, buildCompleteUserProfile: buildFriendCompleteUserProfile } = require('./utils/friendPayloadUtils');
+const { normalizeFriendRequestStatus, buildFriendRequestPayload, buildCompleteUserProfile: buildFriendCompleteUserProfile } = require('./utils/friendPayloadUtils');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup, stopOtpCleanup } = require('./utils/otpStore');
 const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
@@ -2094,31 +2096,42 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
       return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
     }
 
-    await denyFriendRequest(userId, targetUserId);
+    const request = await getFriendRequest(userId, targetUserId);
+    if (!request) {
+      return sendError(res, 404, 'Friend request not found', 'REQUEST_NOT_FOUND');
+    }
 
-    Logger.info('friends/request/deny', '✅ Friend request denied', { from: userId, to: targetUserId });
+    const denialResult = await denyFriendRequest(userId, targetUserId);
+    const finalStatus = normalizeFriendRequestStatus(denialResult?.status || request.status || 'rejected');
+
+    Logger.info('friends/request/deny', '✅ Friend request denied', { from: userId, to: targetUserId, status: finalStatus });
+
+    const updatedSenderUser = await getUserById(userId);
+    const updatedRecipientUser = await getUserById(targetUserId);
 
     // 📱 Emit real-time notification to sender
     notifyUserOfFriendEvent(userId, 'friend_request_denied', {
       request: buildFriendRequestPayload({
+        ...request,
         requestId: `${userId}|${targetUserId}`,
-        status: 'denied',
+        status: finalStatus,
         senderId: userId,
         receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_DENIED',
         isIncoming: false,
-        sender: buildFriendCompleteUserProfile(await getUserById(userId)),
-        receiver: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+        sender: buildFriendCompleteUserProfile(updatedSenderUser),
+        receiver: buildFriendCompleteUserProfile(updatedRecipientUser),
       }),
-      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
-      friend: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      currentUser: buildFriendCompleteUserProfile(updatedSenderUser),
+      friend: buildFriendCompleteUserProfile(updatedRecipientUser),
     });
 
     return sendSuccess(res, {
-      currentUser: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      currentUser: buildFriendCompleteUserProfile(updatedRecipientUser),
       request: buildFriendRequestPayload({
+        ...request,
         requestId: `${userId}|${targetUserId}`,
-        status: 'denied',
+        status: finalStatus,
         senderId: userId,
         receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_DENIED',
