@@ -66,23 +66,6 @@ const {
   deleteUserById,
   searchUsers,
   clearExpiredStatuses,
-  getFriendRequest,
-  getFriendRequestByRequestId,
-  getFriendBetween,
-  createFriendRequest,
-  getFriendshipStatus,
-  getFriendRequestBetweenUsers,
-  updateFriendRequestStatus,
-  acceptFriendRequestTransaction,
-  normalizeFriendRequestEntries,
-  serializeFriendRequestForClient,
-  serializeFriendForClient,
-  deleteFriendRequest,
-  deleteFriendRelationship,
-  queryFriendRequestsBySender,
-  queryFriendRequestsByRecipient,
-  listFriendsForUser,
-  countFriendsForUser,
   getUsersByIds,
   getActiveBlock,
   putBlockedUser,
@@ -90,10 +73,17 @@ const {
   getReportsForUser,
   getReport,
   createReport,
-  deleteFriendRelationsForUser,
   deleteBlocksForUser,
   deleteReportsForUserAndReporter,
   getUserStats,
+  // Friend request management
+  createFriendRequest,
+  getFriendRequest,
+  queryFriendRequestsForUser,
+  acceptFriendRequest,
+  denyFriendRequest,
+  removeFriend,
+  listFriends,
 } = require('./utils/dynamoDBService');
 
 const isDatabaseConnected = isDbConnected;
@@ -119,55 +109,11 @@ function normalizeIdValue(value) {
   }
 }
 
-function normalizeFriendReference(friend) {
-  if (!friend) return null;
-  if (typeof friend === 'string' || typeof friend === 'number') {
-    return { friendId: String(friend), addedAt: null };
-  }
-  if (typeof friend === 'object') {
-    const friendId = normalizeIdValue(friend.friendId || friend.userId || friend.id || null);
-    return {
-      friendId,
-      addedAt: normalizeIsoTimestamp(friend.addedAt || friend.createdAt || friend.updatedAt || null),
-    };
-  }
-  return null;
-}
-
-function normalizeFriendReferences(friends) {
-  if (!Array.isArray(friends)) return [];
-  return friends
-    .map(normalizeFriendReference)
-    .filter((item) => item && item.friendId);
-}
-
-function buildCompleteUserProfile(user, currentUserId = null, requestUserMap = new Map()) {
+function buildCompleteUserProfile(user) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
   const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
   const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
-  const normalizedFriends = normalizeFriendReferences(user.friends || user.friendIds || []);
-  const normalizedFriendIds = Array.isArray(user.friendIds)
-    ? user.friendIds.map((id) => String(id))
-    : normalizedFriends.map((friend) => friend.friendId);
-
-  const currentId = currentUserId || user.userId || null;
-  const rawRequests = normalizeFriendRequestEntries(user.friendRequests);
-  const serializedRequests = rawRequests
-    .map((r) => {
-      if (!r || typeof r !== 'object') return null;
-      const senderId = normalizeId(r.userId || r.senderId || r.fromUserId || '');
-      const recipientId = normalizeId(r.recipientId || r.friendId || r.recipientUserId || r.toUserId || '');
-      const senderUser = senderId && requestUserMap.has(senderId)
-        ? requestUserMap.get(senderId)
-        : (senderId ? userCache.get(senderId) : null);
-      const recipientUser = recipientId && requestUserMap.has(recipientId)
-        ? requestUserMap.get(recipientId)
-        : (recipientId ? userCache.get(recipientId) : null);
-      return serializeFriendRequestForClient(r, currentId, senderUser, recipientUser);
-    })
-    .filter(Boolean);
-
   const normalizedEmail = user.email ? String(user.email).trim().toLowerCase() : null;
   const emailVerified = user.emailVerified === true;
   const emailVerifiedAt = normalizeIsoTimestamp(user.emailVerifiedAt);
@@ -207,24 +153,16 @@ function buildCompleteUserProfile(user, currentUserId = null, requestUserMap = n
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
-    friends: normalizedFriends,
-    friendIds: normalizedFriendIds,
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
     isOnline: user.isOnline === true,
     isFriend: user.isFriend === true,
     lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
-    friendRequests: serializedRequests,
-    pendingFriendRequests: serializedRequests.filter((req) => String(req.status || '').toLowerCase() === 'pending'),
     profileComplete: user.profileComplete === true,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
   };
-}
-
-function buildFriendRequestPayload(request, currentUserId, senderUser = null, recipientUser = null) {
-  return serializeFriendRequestForClient(request, currentUserId, senderUser, recipientUser);
 }
 
 // ✅ Import optimization utilities
@@ -1789,21 +1727,9 @@ async function handleGetUserProfile(req, res) {
       }
     }
 
-    const friendCount = await countFriendsForUser(userId);
-
-    const friendIds = await listFriendsForUser(userId);
-    const friends = Array.isArray(friendIds) && friendIds.length
-      ? friendIds.map((friendId) => ({
-          friendId: String(friendId),
-          addedAt: null,
-        }))
-      : [];
-
     return sendSuccess(res, {
       user: {
         ...buildCompleteUserProfile(user),
-        friendCount,
-        friends: friends.length ? friends : [],
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
       },
@@ -1913,776 +1839,352 @@ app.get('/user/:userId', async (req, res) => {
   return handleGetUserProfile(req, res);
 });
 
-// ========== FRIEND REQUEST CANCEL ENDPOINT ==========
-app.post('/friends/request/:requestId/cancel', async (req, res) => {
+// ========== FRIEND REQUEST & FRIEND LIST ENDPOINTS ==========
+// Send friend request: POST /friends/request/send
+app.post('/friends/request/send', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { userId, targetUserId } = req.body;
+  if (!userId || !targetUserId) {
+    return sendError(res, 400, 'userId and targetUserId are required', 'VALIDATION_ERROR');
+  }
+
+  // 🔒 Check rate limit
+  if (!checkFriendRateLimit(userId, 'sendRequest')) {
+    return sendError(res, 429, 'Too many friend requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
+  }
+
+  if (userId === targetUserId) {
+    return sendError(res, 400, 'Cannot send friend request to yourself', 'INVALID_REQUEST');
   }
 
   try {
-    const requestId = normalizeId(req.params.requestId || '');
-    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
-
-    if (!requestId) {
-      return sendError(res, 400, 'requestId is required');
-    }
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
-    }
-
-    const friendRequest = await getFriendRequestByRequestId(requestId);
-    if (!friendRequest) {
-      return sendError(res, 404, 'Friend request not found');
-    }
-
-    // Only the sender can cancel a pending friend request
-    if (normalizeId(friendRequest.userId) !== userId) {
-      return sendError(res, 403, 'Not authorized to cancel this request');
-    }
-
-    await deleteFriendRequest(friendRequest.userId, friendRequest.friendId);
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendRequest.friendId);
-
-    Logger.info('friends/request/cancel', 'Friend request canceled', { userId, requestId });
-
-    // Provide nested sender/recipient for client to identify and clear UI
-    let senderUser = userCache.get(friendRequest.userId);
-    if (!senderUser) {
-      senderUser = await getUserById(friendRequest.userId);
-      if (senderUser) userCache.set(friendRequest.userId, senderUser);
-    }
-    let recipientUser = userCache.get(friendRequest.friendId);
-    if (!recipientUser) {
-      recipientUser = await getUserById(friendRequest.friendId);
-      if (recipientUser) userCache.set(friendRequest.friendId, recipientUser);
-    }
-
-    const canceledPayload = buildFriendRequestPayload(friendRequest, friendRequest.friendId, senderUser, recipientUser);
-    canceledPayload.isIncoming = true;  // ✅ Mark as incoming for recipient
-    const recipientSocketId = userSockets.get(friendRequest.friendId);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('friend_request_canceled', {
-        ...canceledPayload,
-        message: `${senderUser?.userName || 'Someone'} canceled their friend request`,
-      });
-    }
-
-    // Notify both parties to refresh pending request lists
-    try {
-      const senderSocketId = userSockets.get(friendRequest.userId);
-      if (senderSocketId && io && typeof io.to === 'function') {
-        io.to(senderSocketId).emit('pending_requests_updated', {
-          forUserId: friendRequest.userId,
-          reason: 'request_canceled',
-          requestId,
-        });
-      }
-      if (recipientSocketId && io && typeof io.to === 'function') {
-        io.to(recipientSocketId).emit('pending_requests_updated', {
-          forUserId: friendRequest.friendId,
-          reason: 'request_canceled',
-          requestId,
-        });
-      }
-    } catch (e) {
-      Logger.warn('friends/request/cancel', 'Failed to emit pending_requests_updated', e && e.message);
-    }
-
-    // ✅ Get and return the updated current user to preserve all profile fields
-    let updatedCurrentUser = userCache.get(userId);
-    if (!updatedCurrentUser) {
-      updatedCurrentUser = await getUserById(userId);
-      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
-    }
-
-    const requestUserMap = new Map();
-    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
-    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Friend request canceled',
-      request: canceledPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId, requestUserMap),
-    });
-  } catch (err) {
-    Logger.error('friends/request/cancel', 'Error canceling friend request', err.message);
-    return sendError(res, 500, 'Error canceling friend request', { details: err.message });
-  }
-});
-
-// ========== NEW: SEND/ADD FRIEND REQUEST ENDPOINT ==========
-app.post('/friends/add', async (req, res) => {
-  if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
-  }
-
-  try {
-    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
-    const friendId = normalizeId(req.body.friendId || '');
-
-    if (!userId || !friendId) {
-      return sendError(res, 400, 'userId and friendId are required');
-    }
-
-    if (userId === friendId) {
-      return sendError(res, 400, 'Cannot send friend request to yourself');
-    }
-
     // Check if already friends
-    const existingFriend = await getFriendshipStatus(userId, friendId);
-    if (existingFriend === 'FRIEND') {
-      return sendError(res, 409, 'Already friends');
+    const existingFriends = await listFriends(userId);
+    if (existingFriends.includes(String(targetUserId))) {
+      return sendError(res, 409, 'Already friends with this user', 'ALREADY_FRIENDS');
     }
 
-    // Check if request already exists
-    const existingRequest = await getFriendRequestBetweenUsers(userId, friendId);
-    if (existingRequest && String(existingRequest.status || '').toLowerCase() === 'pending') {
-      return sendError(res, 409, 'Friend request already pending');
+    // Check if request already pending
+    const existing = await getFriendRequest(userId, targetUserId);
+    if (existing && existing.status === 'pending') {
+      return sendError(res, 409, 'Friend request already pending', 'REQUEST_PENDING');
     }
 
-    // Get sender and recipient user data for socket event display only
-    // Sanitize incoming request body to prevent client-supplied user snapshots
-    // from being persisted or used by the backend.
-    try {
-      const forbidden = ['sender', 'recipient', 'senderUser', 'recipientUser', 'fromUser', 'toUser'];
-      for (const key of forbidden) {
-        if (Object.prototype.hasOwnProperty.call(req.body, key)) {
-          delete req.body[key];
-          Logger.debug('friends/add', `Stripped client-supplied field from request body: ${key}`);
-        }
-      }
-    } catch (e) {
-      Logger.warn('friends/add', 'Failed to sanitize request body', e && e.message);
+    // Create request with user profiles (use cache to minimize DB calls)
+    const senderUser = await getCachedUserProfile(userId);
+    const recipientUser = await getCachedUserProfile(targetUserId);
+
+    if (!senderUser || !recipientUser) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
     }
 
-    let senderUser = userCache.get(userId);
-    if (!senderUser) {
-      senderUser = await getUserById(userId);
-      if (senderUser) userCache.set(userId, senderUser);
-    }
-
-    let recipientUser = userCache.get(friendId);
-    if (!recipientUser) {
-      recipientUser = await getUserById(friendId);
-      if (recipientUser) userCache.set(friendId, recipientUser);
-    }
-
-    const friendRequest = await createFriendRequest(userId, friendId, { senderUser, recipientUser });
-
-    // Debug: log incoming request and created record
-    Logger.debug('friends/add', 'Received friends/add', { body: req.body, userId, friendId });
-    Logger.debug('friends/add', 'Created friendRequest', { request: friendRequest });
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendId);
-
-    Logger.info('friends/add', 'Friend request created', { userId, friendId, requestId: friendRequest.requestId });
-
-    // NOTE: We intentionally DO NOT emit a real-time 'friend_request_received' socket
-    // event here. The frontend loads pending requests via the requests endpoints
-    // and the Notifications UI provides accept/deny. Persisted request is available
-    // for the recipient when they next sync or fetch pending requests.
-    const recipientSocketId = userSockets.get(friendId);
-    Logger.debug('friends/add', 'Recipient socket id lookup (no realtime emit)', { friendId, recipientSocketId });
-
-    // Notify recipient to refresh their pending requests list in real-time if connected
-    try {
-      if (recipientSocketId && io && typeof io.to === 'function') {
-        io.to(recipientSocketId).emit('pending_requests_updated', {
-          forUserId: friendId,
-          reason: 'new_request',
-          requestId: friendRequest.requestId,
-        });
-      }
-    } catch (e) {
-      Logger.warn('friends/add', 'Failed to emit pending_requests_updated', e && e.message);
-    }
-
-    // Build outgoing payload for sender response, so fromUser fields reflect the target recipient
-    const senderResponsePayload = buildFriendRequestPayload(friendRequest, userId, senderUser, recipientUser);
-
-    // ✅ Fetch the updated current user with all profile fields preserved
-    let updatedCurrentUser = await getUserById(userId);
-    if (updatedCurrentUser) {
-      userCache.set(userId, updatedCurrentUser);
-    }
-
-    const requestUserMap = new Map();
-    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
-    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
-
-    return res.status(201).json({
-      success: true,
-      message: 'Friend request sent',
-      request: senderResponsePayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || senderUser, userId, requestUserMap),
+    const request = await createFriendRequest(userId, targetUserId, {
+      senderProfile: { userId: senderUser.userId, userName: senderUser.userName },
+      recipientProfile: { userId: recipientUser.userId, userName: recipientUser.userName },
     });
-  } catch (err) {
-    Logger.error('friends/add', 'Error sending friend request', err.message);
-    return sendError(res, 500, 'Error sending friend request', { details: err.message });
-  }
-});
 
-// ========== NEW: ACCEPT FRIEND REQUEST ENDPOINT ==========
-app.post('/friends/request/:requestId/accept', async (req, res) => {
+    Logger.info('friends/request/send', '✅ Friend request created', { from: userId, to: targetUserId });
+
+    // 📱 Emit real-time notification to recipient if online
+    notifyUserOfFriendEvent(targetUserId, 'friend_request_received', {
+      requestId: request.requestId,
+      from: {
+        userId: senderUser.userId,
+        userName: senderUser.userName,
+        avatarColor: senderUser.avatarColor,
+      },
+      createdAt: request.createdAt,
+    });
+
+    return sendSuccess(res, { request }, 'Friend request sent successfully');
+  } catch (err) {
+    Logger.error('friends/request/send', 'Error sending friend request', err.message);
+    return sendError(res, 500, 'Failed to send friend request', { details: err.message });
+  }
+}));
+
+// Accept friend request: POST /friends/request/accept
+app.post('/friends/request/accept', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { requestId } = req.body;
+  if (!requestId) {
+    return sendError(res, 400, 'requestId is required', 'VALIDATION_ERROR');
   }
 
   try {
-    const requestId = normalizeId(req.params.requestId || '');
-    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
-
-    if (!requestId) {
-      return sendError(res, 400, 'requestId is required');
-    }
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
+    // Parse requestId format: "userId|targetUserId"
+    const [userId, targetUserId] = requestId.split('|');
+    if (!userId || !targetUserId) {
+      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
     }
 
-    const friendRequest = await getFriendRequestByRequestId(requestId);
-    if (!friendRequest) {
-      return sendError(res, 404, 'Friend request not found');
+    // 🔒 Check rate limit
+    if (!checkFriendRateLimit(targetUserId, 'acceptRequest')) {
+      return sendError(res, 429, 'Too many requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
     }
 
-    if (normalizeId(friendRequest.friendId) !== userId) {
-      return sendError(res, 403, 'Not authorized to accept this request');
+    const request = await getFriendRequest(userId, targetUserId);
+    if (!request || request.status !== 'pending') {
+      return sendError(res, 404, 'Friend request not found or not pending', 'REQUEST_NOT_FOUND');
     }
 
-    if (String(friendRequest.status || '').toLowerCase() !== 'pending') {
-      return sendError(res, 400, 'Friend request is no longer pending');
-    }
+    // Accept request (add to both users' friend lists)
+    await acceptFriendRequest(userId, targetUserId);
 
-    // Fetch sender/recipient profiles (from cache or DB) so we can include
-    // rich profile snapshots in the transaction (used for notifications).
-    let senderUser = userCache.get(friendRequest.userId);
-    let recipientUser = userCache.get(friendRequest.friendId);
-    const toFetch = [];
-    if (!senderUser) toFetch.push({ id: friendRequest.userId, key: friendRequest.userId, as: 'sender' });
-    if (!recipientUser) toFetch.push({ id: friendRequest.friendId, key: friendRequest.friendId, as: 'recipient' });
+    // Load updated users
+    const updatedUser = await getUserById(targetUserId);
+    const senderUser = await getUserById(userId);
 
-    if (toFetch.length > 0) {
-      const promises = toFetch.map((t) => getUserById(t.id));
-      const fetched = await Promise.all(promises);
-      for (let idx = 0; idx < fetched.length; idx++) {
-        const t = toFetch[idx];
-        const u = fetched[idx];
-        if (u) {
-          userCache.set(t.key, u);
-          if (t.as === 'sender') senderUser = u;
-          if (t.as === 'recipient') recipientUser = u;
-        }
-      }
-    }
+    // 🗑️ Clear caches for both users
+    clearUserProfileCache(userId);
+    clearUserProfileCache(targetUserId);
 
-    // Atomically accept the friend request and create friendship records
-    const updatedRequest = await acceptFriendRequestTransaction(friendRequest, { senderUser, recipientUser }).catch((e) => {
-      Logger.error('friends/request/accept', 'Transaction failed', e && e.message);
-      throw e;
+    Logger.info('friends/request/accept', '✅ Friend request accepted', { from: userId, to: targetUserId });
+
+    // 📱 Emit real-time notification to sender
+    notifyUserOfFriendEvent(userId, 'friend_request_accepted', {
+      from: {
+        userId: targetUserId,
+        userName: updatedUser?.userName,
+        avatarColor: updatedUser?.avatarColor,
+      },
+      acceptedAt: new Date().toISOString(),
     });
 
-    if (!updatedRequest || String(updatedRequest.status || '').toLowerCase() !== 'accepted') {
-      Logger.error('friends/request/accept', 'Failed to accept friend request in transaction', { userId, requestId });
-      return sendError(res, 500, 'Failed to accept friend request');
-    }
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendRequest.userId);
-
-    Logger.info('friends/request/accept', 'Friend request accepted', { userId, requestId });
-
-    // senderUser and recipientUser were fetched earlier and may be present here
-
-    // Emit socket events with normalized friend request payload to the sender
-    const senderSocketId = userSockets.get(friendRequest.userId);
-    const senderEventPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
-    senderEventPayload.isIncoming = false;  // ✅ Mark as outgoing for sender (they sent the original request)
-    const senderNewFriendPayload = buildCompleteUserProfile(recipientUser, friendRequest.userId);
-    if (senderSocketId) {
-      io.to(senderSocketId).emit('friend_request_accepted', {
-        ...senderEventPayload,
-        newFriend: senderNewFriendPayload,
-      });
-
-      // Also notify the sender directly that a new friend was added.
-      io.to(senderSocketId).emit('friend_added', {
-        newFriend: senderNewFriendPayload,
-        message: `${recipientUser?.userName || 'Someone'} accepted your friend request`,
-      });
-    }
-
-    const recipientSocketId = userSockets.get(userId);
-    const responseRequestPayload = buildFriendRequestPayload(updatedRequest, userId, senderUser, recipientUser);
-    responseRequestPayload.isIncoming = true;
-
-    // Emit pending_requests_updated to the sender to refresh their pending/outgoing lists
-    try {
-      if (senderSocketId && io && typeof io.to === 'function') {
-        io.to(senderSocketId).emit('pending_requests_updated', {
-          forUserId: friendRequest.userId,
-          reason: 'request_accepted',
-          requestId,
-        });
-      }
-      if (recipientSocketId && io && typeof io.to === 'function') {
-        io.to(recipientSocketId).emit('pending_requests_updated', {
-          forUserId: userId,
-          reason: 'request_accepted',
-          requestId,
-        });
-      }
-    } catch (e) {
-      Logger.warn('friends/request/accept', 'Failed to emit pending_requests_updated', e && e.message);
-    }
-
-    // Notify the recipient about the new friend relationship if connected
-    const recipientNewFriendPayload = buildCompleteUserProfile(senderUser, userId);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('friend_added', {
-        newFriend: recipientNewFriendPayload,
-        message: `${senderUser?.userName || 'Someone'} is now your friend`,
-      });
-    }
-
-    // ✅ Get and return the updated current user to preserve all profile fields
-    let updatedCurrentUser = userCache.get(userId);
-    if (!updatedCurrentUser) {
-      updatedCurrentUser = await getUserById(userId);
-      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
-    }
-
-    const requestUserMap = new Map();
-    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
-    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
-
-    // ✅ OPTIMIZATION: Return updated friend list so frontend can immediately show new friend
-    const updatedFriendIds = await listFriendsForUser(userId);
-    const friendIds = updatedFriendIds.map((id) => normalizeId(id)).filter(Boolean);
-    const cachedFriends = userCache.batchGet(friendIds);
-    const missingFriendIds = friendIds.filter((id) => !cachedFriends.get(id));
-
-    let freshFriends = [];
-    if (missingFriendIds.length > 0) {
-      freshFriends = await getUsersByIds(missingFriendIds);
-      freshFriends.forEach((u) => {
-        const normalizedId = normalizeId(u.userId);
-        if (normalizedId) {
-          userCache.set(normalizedId, u);
-        }
-      });
-    }
-
-    const friendUserMap = new Map();
-    for (const user of Array.from(cachedFriends.values()).filter(Boolean)) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        friendUserMap.set(normalizedId, user);
-      }
-    }
-    for (const user of freshFriends) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        friendUserMap.set(normalizedId, user);
-      }
-    }
-
-    const updatedFriendsList = friendIds
-      .map((id) => friendUserMap.get(id))
-      .filter(Boolean)
-      .map((u) => buildCompleteUserProfile(u));
-
-    return res.status(200).json({
-      success: true,
-      message: 'Friend request accepted',
-      request: responseRequestPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId, requestUserMap) || buildCompleteUserProfile(recipientUser, userId, requestUserMap),
-      newFriend: recipientNewFriendPayload || senderNewFriendPayload,
-      updatedFriendsList,
-    });
+    return sendSuccess(res, {
+      currentUser: buildCompleteUserProfile(updatedUser),
+      friend: buildCompleteUserProfile(senderUser),
+    }, 'Friend request accepted');
   } catch (err) {
     Logger.error('friends/request/accept', 'Error accepting friend request', err.message);
-    return sendError(res, 500, 'Error accepting friend request', { details: err.message });
+    return sendError(res, 500, 'Failed to accept friend request', { details: err.message });
   }
-});
+}));
 
-// ========== NEW: DENY FRIEND REQUEST ENDPOINT ==========
-app.post('/friends/request/:requestId/deny', async (req, res) => {
+// Deny/reject friend request: POST /friends/request/deny
+app.post('/friends/request/deny', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { requestId } = req.body;
+  if (!requestId) {
+    return sendError(res, 400, 'requestId is required', 'VALIDATION_ERROR');
   }
 
   try {
-    const requestId = normalizeId(req.params.requestId || '');
-    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
-
-    if (!requestId) {
-      return sendError(res, 400, 'requestId is required');
-    }
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
+    const [userId, targetUserId] = requestId.split('|');
+    if (!userId || !targetUserId) {
+      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
     }
 
-    const friendRequest = await getFriendRequestByRequestId(requestId);
-    if (!friendRequest) {
-      return sendError(res, 404, 'Friend request not found');
-    }
+    await denyFriendRequest(userId, targetUserId);
 
-    if (normalizeId(friendRequest.friendId) !== userId) {
-      return sendError(res, 403, 'Not authorized to deny this request');
-    }
+    Logger.info('friends/request/deny', '✅ Friend request denied', { from: userId, to: targetUserId });
 
-    if (String(friendRequest.status || '').toLowerCase() !== 'pending') {
-      return sendError(res, 400, 'Friend request is no longer pending');
-    }
-
-    // Fetch sender/recipient profiles to include in persisted request metadata
-    let senderUser = userCache.get(friendRequest.userId);
-    let recipientUser = userCache.get(friendRequest.friendId);
-    const toFetch2 = [];
-    if (!senderUser) toFetch2.push({ id: friendRequest.userId, key: friendRequest.userId, as: 'sender' });
-    if (!recipientUser) toFetch2.push({ id: friendRequest.friendId, key: friendRequest.friendId, as: 'recipient' });
-    if (toFetch2.length > 0) {
-      const promises2 = toFetch2.map((t) => getUserById(t.id));
-      const fetched2 = await Promise.all(promises2);
-      for (let idx = 0; idx < fetched2.length; idx++) {
-        const t = toFetch2[idx];
-        const u = fetched2[idx];
-        if (u) {
-          userCache.set(t.key, u);
-          if (t.as === 'sender') senderUser = u;
-          if (t.as === 'recipient') recipientUser = u;
-        }
-      }
-    }
-
-    // Update request status to denied, include profile metadata
-    const updatedRequest = await updateFriendRequestStatus(friendRequest.userId, friendRequest.friendId, 'denied', { senderUser, recipientUser });
-
-    userCache.invalidate(userId);
-    userCache.invalidate(friendRequest.userId);
-
-    Logger.info('friends/request/deny', 'Friend request denied', { userId, requestId });
-
-    // Notify sender and recipient to refresh pending lists
-    try {
-      const senderSocketId = userSockets.get(friendRequest.userId);
-      const recipientSocketId = userSockets.get(friendRequest.friendId);
-      if (senderSocketId && io && typeof io.to === 'function') {
-        io.to(senderSocketId).emit('pending_requests_updated', {
-          forUserId: friendRequest.userId,
-          reason: 'request_denied',
-          requestId,
-        });
-      }
-      if (recipientSocketId && io && typeof io.to === 'function') {
-        io.to(recipientSocketId).emit('pending_requests_updated', {
-          forUserId: friendRequest.friendId,
-          reason: 'request_denied',
-          requestId,
-        });
-      }
-    } catch (e) {
-      Logger.warn('friends/request/deny', 'Failed to emit pending_requests_updated', e && e.message);
-    }
-    // senderUser and recipientUser were already fetched above for metadata
-
-    // Emit socket event to sender with normalized request payload
-    const senderSocketId = userSockets.get(friendRequest.userId);
-    const senderEventPayload = buildFriendRequestPayload(updatedRequest, friendRequest.userId, senderUser, recipientUser);
-    senderEventPayload.isIncoming = false;  // ✅ Mark as outgoing for sender
-    if (senderSocketId) {
-      io.to(senderSocketId).emit('friend_request_denied', {
-        ...senderEventPayload,
-        message: `${recipientUser?.userName || 'Someone'} denied your friend request`,
-      });
-    }
-
-    const responseRequestPayload = buildFriendRequestPayload(updatedRequest, userId, senderUser, recipientUser);
-    responseRequestPayload.isIncoming = true;
-
-    // ✅ Get and return the updated current user to preserve all profile fields
-    let updatedCurrentUser = userCache.get(userId);
-    if (!updatedCurrentUser) {
-      updatedCurrentUser = await getUserById(userId);
-      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
-    }
-
-    const requestUserMap = new Map();
-    if (senderUser && senderUser.userId) requestUserMap.set(normalizeId(senderUser.userId), senderUser);
-    if (recipientUser && recipientUser.userId) requestUserMap.set(normalizeId(recipientUser.userId), recipientUser);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Friend request denied',
-      request: responseRequestPayload,
-      currentUser: buildCompleteUserProfile(updatedCurrentUser || recipientUser, userId, requestUserMap),
+    // 📱 Emit real-time notification to sender
+    notifyUserOfFriendEvent(userId, 'friend_request_denied', {
+      to: targetUserId,
+      deniedAt: new Date().toISOString(),
     });
+
+    return sendSuccess(res, {}, 'Friend request denied');
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
-    return sendError(res, 500, 'Error denying friend request', { details: err.message });
+    return sendError(res, 500, 'Failed to deny friend request', { details: err.message });
   }
-});
+}));
 
-// ========== NEW: REMOVE FRIEND ENDPOINT ==========
-app.post('/friends/remove', async (req, res) => {
+// Cancel outgoing friend request: POST /friends/request/cancel
+app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { requestId } = req.body;
+  if (!requestId) {
+    return sendError(res, 400, 'requestId is required', 'VALIDATION_ERROR');
   }
 
   try {
-    const { friendId: rawFriendId } = req.body;
-    const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
-    const friendId = normalizeId(rawFriendId);
-
-    if (!userId || !friendId) {
-      return sendError(res, 400, 'userId and friendId are required');
+    const [userId, targetUserId] = requestId.split('|');
+    if (!userId || !targetUserId) {
+      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
     }
 
-    if (userId === friendId) {
-      return sendError(res, 400, 'Cannot remove yourself as a friend');
-    }
+    await denyFriendRequest(userId, targetUserId);
 
-    const deletedCount = await deleteFriendRelationship(userId, friendId);
+    Logger.info('friends/request/cancel', '✅ Friend request cancelled', { from: userId, to: targetUserId });
 
-    if (!deletedCount) {
-      return sendError(res, 404, 'Friend relationship not found');
-    }
-
-    // ✅ Invalidate cache for both users since their friend lists changed
-    userCache.invalidate(userId);
-    userCache.invalidate(friendId);
-
-    Logger.info('friends/remove', 'Friend removed', { userId, friendId });
-
-    const userSocketId = userSockets.get(userId);
-    const friendSocketId = userSockets.get(friendId);
-    if (userSocketId) {
-      io.to(userSocketId).emit('friend_removed', {
-        userId,
-        friendId,
-        message: 'Friend removed',
-      });
-    }
-    if (friendSocketId) {
-      io.to(friendSocketId).emit('friend_removed', {
-        userId: friendId,
-        friendId: userId,
-        message: 'A friend removed you',
-      });
-    }
-
-    // ✅ Get and return the updated current user to preserve all profile fields
-    let updatedCurrentUser = userCache.get(userId);
-    if (!updatedCurrentUser) {
-      updatedCurrentUser = await getUserById(userId);
-      if (updatedCurrentUser) userCache.set(userId, updatedCurrentUser);
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Friend removed successfully',
-      currentUser: buildCompleteUserProfile(updatedCurrentUser, userId),
+    // 📱 Emit real-time notification to recipient
+    notifyUserOfFriendEvent(targetUserId, 'friend_request_cancelled', {
+      from: userId,
+      cancelledAt: new Date().toISOString(),
     });
+
+    return sendSuccess(res, {}, 'Friend request cancelled');
+  } catch (err) {
+    Logger.error('friends/request/cancel', 'Error cancelling friend request', err.message);
+    return sendError(res, 500, 'Failed to cancel friend request', { details: err.message });
+  }
+}));
+
+// Remove friend: POST /friends/remove
+app.post('/friends/remove', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { userId, friendId } = req.body;
+  if (!userId || !friendId) {
+    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  }
+
+  try {
+    await removeFriend(userId, friendId);
+
+    // 🗑️ Clear caches for both users
+    clearUserProfileCache(userId);
+    clearUserProfileCache(friendId);
+
+    Logger.info('friends/remove', '✅ Friend removed', { user: userId, removed: friendId });
+
+    // 📱 Emit real-time notification to removed friend
+    notifyUserOfFriendEvent(friendId, 'friend_removed', {
+      by: userId,
+      removedAt: new Date().toISOString(),
+    });
+
+    return sendSuccess(res, {}, 'Friend removed successfully');
   } catch (err) {
     Logger.error('friends/remove', 'Error removing friend', err.message);
-    return sendError(res, 500, 'Error removing friend', { details: err.message });
+    return sendError(res, 500, 'Failed to remove friend', { details: err.message });
   }
-});
+}));
 
-// ========== NEW: GET FRIENDS LIST ENDPOINT ==========
-app.get('/friends/list', async (req, res) => {
+// Get friends list: GET /friends/list?userId=<userId>
+app.get('/friends/list', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId);
+  if (!userId) {
+    return sendError(res, 400, 'userId query parameter is required', 'VALIDATION_ERROR');
+  }
+
+  // 🔒 Check rate limit
+  if (!checkFriendRateLimit(userId, 'listFriends')) {
+    return sendError(res, 429, 'Too many requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
   }
 
   try {
-    const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+    const friendIds = await listFriends(userId);
+    const friends = await getUsersByIds(friendIds);
 
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
-    }
-
-    const friends = await listFriendsForUser(userId);
-    const friendIds = friends.map((id) => normalizeId(id)).filter(Boolean);
-
-    const cachedUsers = userCache.batchGet(friendIds);
-    const missingFriendIds = friendIds.filter((id) => !cachedUsers.get(id));
-
-    let freshFriendUsers = [];
-    if (missingFriendIds.length > 0) {
-      freshFriendUsers = await getUsersByIds(missingFriendIds);
-      freshFriendUsers.forEach((u) => {
-        const normalizedId = normalizeId(u.userId);
-        if (normalizedId) {
-          userCache.set(normalizedId, u);
-        }
-      });
-    }
-
-    const friendUserMap = new Map();
-    for (const user of Array.from(cachedUsers.values()).filter(Boolean)) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        friendUserMap.set(normalizedId, user);
-      }
-    }
-    for (const user of freshFriendUsers) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        friendUserMap.set(normalizedId, user);
-      }
-    }
-
-    const orderedFriendUsers = friendIds
-      .map((id) => friendUserMap.get(id))
-      .filter(Boolean);
-
-    // ✅ Enhanced: Include online status by checking if user has active socket
-    const friendList = orderedFriendUsers.map((u) => {
-      const normalizedId = normalizeId(u.userId);
-      return {
-        ...buildCompleteUserProfile(u),
-        userId: normalizedId,
-        id: normalizedId,
-        friendId: normalizedId,
-        isOnline: userSockets.has(normalizedId),
-      };
-    });
-
-    return res.status(200).json({
-      success: true,
-      friends: friendList.length ? friendList : null,
-      count: friendList.length,
-    });
-
+    return sendSuccess(res, {
+      friends: friends.map((f) => buildCompleteUserProfile(f)),
+      count: friends.length,
+    }, 'Friends list retrieved');
   } catch (err) {
-    Logger.error('friends/list', 'Error getting friends list', err.message);
-    return sendError(res, 500, 'Error getting friends list', { details: err.message });
+    Logger.error('friends/list', 'Error retrieving friends list', err.message);
+    return sendError(res, 500, 'Failed to retrieve friends list', { details: err.message });
   }
-});
+}));
 
-// ========== NEW: GET INCOMING FRIEND REQUESTS ENDPOINT ==========
-app.get('/friends/requests/incoming', async (req, res) => {
+// Get incoming friend requests: GET /friends/requests/incoming?userId=<userId>
+app.get('/friends/requests/incoming', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId);
+  if (!userId) {
+    return sendError(res, 400, 'userId query parameter is required', 'VALIDATION_ERROR');
+  }
+
+  // 🔒 Check rate limit
+  if (!checkFriendRateLimit(userId, 'listFriends')) {
+    return sendError(res, 429, 'Too many requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
   }
 
   try {
-    const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+    const requests = await queryFriendRequestsForUser(userId, 'incoming');
+    
+    // Fetch sender profiles for display
+    const enrichedRequests = await Promise.all(
+      requests.map(async (req) => {
+        const sender = await getUserById(req.userId);
+        return {
+          requestId: req.requestId,
+          userId: req.userId,
+          targetUserId: req.targetUserId,
+          status: req.status,
+          createdAt: req.createdAt,
+          sender: sender ? buildCompleteUserProfile(sender) : null,
+        };
+      })
+    );
 
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
-    }
-
-    // Get all incoming friend requests (where user is the recipient)
-    const incomingRequests = await queryFriendRequestsByRecipient(userId);
-
-    const senderIds = incomingRequests.map((r) => normalizeId(r.userId)).filter(Boolean);
-    const cachedSenderUsers = userCache.batchGet(senderIds);
-    const missingSenderIds = senderIds.filter((id) => !cachedSenderUsers.get(id));
-
-    let freshSenderUsers = [];
-    if (missingSenderIds.length > 0) {
-      freshSenderUsers = await getUsersByIds(missingSenderIds);
-      freshSenderUsers.forEach((u) => {
-        const normalizedId = normalizeId(u.userId);
-        if (normalizedId) {
-          userCache.set(normalizedId, u);
-        }
-      });
-    }
-
-    const senderUserMap = new Map();
-    for (const user of Array.from(cachedSenderUsers.values()).filter(Boolean)) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        senderUserMap.set(normalizedId, user);
-      }
-    }
-    for (const user of freshSenderUsers) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        senderUserMap.set(normalizedId, user);
-      }
-    }
-
-    const requestsList = incomingRequests.map((request) => {
-      const normalizedSenderId = normalizeId(request.userId);
-      const sender = normalizedSenderId ? senderUserMap.get(normalizedSenderId) : null;
-      const payload = serializeFriendRequestForClient(request, userId, sender, null);
-      payload.isIncoming = true;
-      return payload;
-    });
-
-    return res.status(200).json({
-      success: true,
-      requests: requestsList.length ? requestsList : null,
-      count: requestsList.length,
-    });
-
+    return sendSuccess(res, {
+      requests: enrichedRequests,
+      count: enrichedRequests.length,
+    }, 'Incoming friend requests retrieved');
   } catch (err) {
-    Logger.error('friends/requests/incoming', 'Error getting incoming requests', err.message);
-    return sendError(res, 500, 'Error getting incoming requests', { details: err.message });
+    Logger.error('friends/requests/incoming', 'Error retrieving incoming requests', err.message);
+    return sendError(res, 500, 'Failed to retrieve incoming requests', { details: err.message });
   }
-});
+}));
 
-// ========== NEW: GET OUTGOING FRIEND REQUESTS ENDPOINT ==========
-app.get('/friends/requests/outgoing', async (req, res) => {
+// Get outgoing friend requests: GET /friends/requests/outgoing?userId=<userId>
+app.get('/friends/requests/outgoing', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
-    return sendError(res, 503, 'Database not available');
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.query.userId);
+  if (!userId) {
+    return sendError(res, 400, 'userId query parameter is required', 'VALIDATION_ERROR');
+  }
+
+  // 🔒 Check rate limit
+  if (!checkFriendRateLimit(userId, 'listFriends')) {
+    return sendError(res, 429, 'Too many requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
   }
 
   try {
-    const userId = normalizeId(req.query.userId || req.headers['x-user-id']);
+    const requests = await queryFriendRequestsForUser(userId, 'outgoing');
 
-    if (!userId) {
-      return sendError(res, 400, 'userId is required');
-    }
+    // Fetch recipient profiles for display
+    const enrichedRequests = await Promise.all(
+      requests.map(async (req) => {
+        const recipient = await getUserById(req.targetUserId);
+        return {
+          requestId: req.requestId,
+          userId: req.userId,
+          targetUserId: req.targetUserId,
+          status: req.status,
+          createdAt: req.createdAt,
+          recipient: recipient ? buildCompleteUserProfile(recipient) : null,
+        };
+      })
+    );
 
-    // Get all outgoing friend requests (where user is the sender)
-    const outgoingRequests = await queryFriendRequestsBySender(userId);
-
-    // Get sender and recipient user details
-    let senderUser = userCache.get(userId);
-    if (!senderUser) {
-      senderUser = await getUserById(userId);
-      if (senderUser) userCache.set(userId, senderUser);
-    }
-
-    const recipientIds = outgoingRequests.map((r) => r.friendId);
-    const recipientUsers = await getUsersByIds(recipientIds);
-    const recipientUserMap = new Map();
-    for (const user of recipientUsers) {
-      const normalizedId = normalizeId(user.userId);
-      if (normalizedId) {
-        recipientUserMap.set(normalizedId, user);
-      }
-    }
-
-    // Map requests to include recipient details
-    const requestsList = outgoingRequests.map((request) => {
-      const normalizedRecipientId = normalizeId(request.friendId);
-      const recipient = normalizedRecipientId ? recipientUserMap.get(normalizedRecipientId) : null;
-      const payload = serializeFriendRequestForClient(request, userId, senderUser, recipient);
-      payload.isIncoming = false;
-      return payload;
-    });
-
-    return res.status(200).json({
-      success: true,
-      requests: requestsList.length ? requestsList : null,
-      count: requestsList.length,
-    });
-
+    return sendSuccess(res, {
+      requests: enrichedRequests,
+      count: enrichedRequests.length,
+    }, 'Outgoing friend requests retrieved');
   } catch (err) {
-    Logger.error('friends/requests/outgoing', 'Error getting outgoing requests', err.message);
-    return sendError(res, 500, 'Error getting outgoing requests', { details: err.message });
+    Logger.error('friends/requests/outgoing', 'Error retrieving outgoing requests', err.message);
+    return sendError(res, 500, 'Failed to retrieve outgoing requests', { details: err.message });
   }
-});
-
+}));
 
 // ========== NEW: GET NOTIFICATIONS ENDPOINT ==========
 app.get('/notifications', async (req, res) => {
@@ -3112,12 +2614,6 @@ async function deleteUserAccount(userId, requestContext = {}) {
 
   Logger.info('user/delete', '✅ User record deleted', { userId: normalizedUserId });
 
-  const friendDeleteCount = await deleteFriendRelationsForUser(normalizedUserId);
-  Logger.info('user/delete', '✅ Friend relationships cleaned up', {
-    userId: normalizedUserId,
-    deletedCount: friendDeleteCount,
-  });
-
   const blockedDeleteCount = await deleteBlocksForUser(normalizedUserId);
   Logger.info('user/delete', '✅ Blocked user records cleaned up', {
     userId: normalizedUserId,
@@ -3170,7 +2666,7 @@ async function deleteUserAccount(userId, requestContext = {}) {
     userId: normalizedUserId,
     deletedAt: new Date().toISOString(),
     cleanupStats: {
-      friendshipsCleaned: friendDeleteResult.deletedCount,
+      friendshipsCleaned: 0,
       blocksCleaned: blockedDeleteResult.deletedCount,
       reportsCleaned: reportDeleteResult.deletedCount,
     },
@@ -3322,6 +2818,141 @@ const profileImageCache = new Map(); // socketId -> profileImagePath (full data 
 let offlineMessages = new Map(); // userId -> [{ payload: messagePayload, ts: number }]
 // TTL for offline messages (default 7 days) - can be adjusted via env
 const OFFLINE_MESSAGE_TTL_MS = (Number(process.env.OFFLINE_MESSAGE_TTL_DAYS) || 7) * 24 * 60 * 60 * 1000;
+
+// ========== FRIEND SYSTEM CACHING & NOTIFICATIONS ==========
+// User profile cache to avoid repeated DB lookups
+const userProfileCache = new Map(); // userId -> { profile, cachedAt }
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Friend notification queue for users who are offline
+const friendNotifications = new Map(); // userId -> [{ event, data, timestamp }]
+const FRIEND_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Rate limiting configuration for friend endpoints
+const FRIEND_RATE_LIMITS = {
+  sendRequest: { maxRequests: 10, windowMs: 60000 }, // 10 requests per minute
+  acceptRequest: { maxRequests: 20, windowMs: 60000 }, // 20 per minute
+  listFriends: { maxRequests: 30, windowMs: 60000 }, // 30 per minute
+};
+
+// Rate limit tracking per user per endpoint
+const friendRateLimitMap = new Map(); // `${userId}:${endpoint}` -> { count, resetAt }
+
+// Helper: Get cached user profile or fetch from DB
+async function getCachedUserProfile(userId) {
+  if (!userId) return null;
+  
+  try {
+    const cached = userProfileCache.get(userId);
+    if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+      return cached.profile;
+    }
+    
+    const profile = await getUserById(userId);
+    if (profile) {
+      userProfileCache.set(userId, { profile, cachedAt: Date.now() });
+    }
+    return profile;
+  } catch (err) {
+    Logger.error('getCachedUserProfile', 'Error fetching cached profile', { userId, error: err.message });
+    return null;
+  }
+}
+
+// Helper: Clear user profile cache
+function clearUserProfileCache(userId) {
+  userProfileCache.delete(userId);
+}
+
+// Helper: Emit real-time friend event to user if they're online
+function notifyUserOfFriendEvent(userId, eventName, data) {
+  try {
+    const socketId = userSockets.get(userId);
+    if (socketId && io.sockets.sockets.has(socketId)) {
+      io.to(socketId).emit(eventName, data);
+      Logger.debug('friend_event', `✅ Emitted ${eventName} to user ${userId}`, { socketId });
+    } else {
+      // Queue notification for offline users
+      if (!friendNotifications.has(userId)) {
+        friendNotifications.set(userId, []);
+      }
+      const notifications = friendNotifications.get(userId);
+      notifications.push({ event: eventName, data, timestamp: Date.now() });
+      Logger.debug('friend_event', `📝 Queued ${eventName} for offline user ${userId}`);
+    }
+  } catch (err) {
+    Logger.error('notifyUserOfFriendEvent', 'Error notifying user', { userId, eventName, error: err.message });
+  }
+}
+
+// Helper: Check and enforce friend rate limits
+function checkFriendRateLimit(userId, endpoint) {
+  const key = `${userId}:${endpoint}`;
+  const limit = FRIEND_RATE_LIMITS[endpoint];
+  if (!limit) return true; // No limit configured
+  
+  const record = friendRateLimitMap.get(key);
+  const now = Date.now();
+  
+  if (!record || now > record.resetAt) {
+    // New window
+    friendRateLimitMap.set(key, { count: 1, resetAt: now + limit.windowMs });
+    return true;
+  }
+  
+  if (record.count < limit.maxRequests) {
+    record.count++;
+    return true;
+  }
+  
+  return false;
+}
+
+// Periodic cleanup for friend notifications and rate limits
+function startFriendSystemCleanup() {
+  return setInterval(() => {
+    try {
+      const now = Date.now();
+      let notifRemoved = 0;
+      let rateLimitRemoved = 0;
+      
+      // Clean expired friend notifications
+      for (const [userId, notifications] of friendNotifications.entries()) {
+        const filtered = notifications.filter(n => now - n.timestamp <= FRIEND_NOTIFICATION_TTL_MS);
+        notifRemoved += (notifications.length - filtered.length);
+        if (filtered.length > 0) {
+          friendNotifications.set(userId, filtered);
+        } else {
+          friendNotifications.delete(userId);
+        }
+      }
+      
+      // Clean expired rate limit records
+      for (const [key, record] of friendRateLimitMap.entries()) {
+        if (now > record.resetAt) {
+          friendRateLimitMap.delete(key);
+          rateLimitRemoved++;
+        }
+      }
+      
+      // Clean user profile cache
+      for (const [userId, cached] of userProfileCache.entries()) {
+        if (now - cached.cachedAt > CACHE_TTL_MS) {
+          userProfileCache.delete(userId);
+        }
+      }
+      
+      if (notifRemoved > 0 || rateLimitRemoved > 0) {
+        Logger.debug('friend_cleanup', 'Friend system cleanup completed', { 
+          notificationsRemoved: notifRemoved, 
+          rateLimitsRemoved: rateLimitRemoved 
+        });
+      }
+    } catch (e) {
+      Logger.warn('friend_cleanup', 'Error during friend system cleanup', { error: e?.message });
+    }
+  }, 10 * 60 * 1000); // run every 10 minutes
+}
 
 // Periodic cleanup for offlineMessages to avoid unbounded memory growth
 function startOfflineMessagesCleanup() {
