@@ -1259,353 +1259,191 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
 
   const requestId = `${normalizeIdValue(userId)}|${normalizeIdValue(targetUserId)}`;
   const now = new Date().toISOString();
+  const senderProfile = metadata.senderProfile || { userId, userName: metadata.userName || userId };
+  const recipientProfile = metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId };
 
-  // Build request item with full metadata for both profiles
-  const requestItem = {
-    PK: `${FRIEND_PREFIX}${userId}`,
-    SK: `${FRIEND_PREFIX}${targetUserId}`,
-    itemType: 'FRIEND_REQUEST',
+  const outgoingRequest = {
     requestId,
-    userId, // sender
-    targetUserId, // recipient
     status: 'pending',
     createdAt: now,
     updatedAt: now,
+    senderId: userId,
+    receiverId: targetUserId,
+    recipientId: targetUserId,
+    userId,
+    targetUserId,
+    requestType: 'FRIEND_REQUEST_OUTGOING',
     isRead: false,
     isReadByReceiver: false,
-    // Optional: store lightweight sender/receiver profiles for display
-    ...(metadata.senderProfile && { senderProfile: metadata.senderProfile }),
-    ...(metadata.recipientProfile && { recipientProfile: metadata.recipientProfile }),
+    isIncoming: false,
+    sender: senderProfile,
+    receiver: recipientProfile,
+    to: recipientProfile,
   };
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
-    const existing = items.find(
-      (item) => item.itemType === 'FRIEND_REQUEST' &&
-        String(item.userId) === String(userId) &&
-        String(item.targetUserId) === String(targetUserId)
-    );
-    if (existing) {
-      // Update existing pending request
-      existing.status = 'pending';
-      existing.updatedAt = now;
-      existing.isRead = false;
-      saveDevStore(items);
-      return existing;
-    }
-    items.push(requestItem);
-    saveDevStore(items);
-    return requestItem;
-  }
+  const incomingRequest = {
+    ...outgoingRequest,
+    requestType: 'FRIEND_REQUEST_INCOMING',
+    isIncoming: true,
+    sender: senderProfile,
+    receiver: recipientProfile,
+    to: recipientProfile,
+    recipientId: targetUserId,
+    receiverId: targetUserId,
+  };
 
-  try {
-    await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: requestItem }));
-    return requestItem;
-  } catch (err) {
-    Logger.error('createFriendRequest', 'Failed to create friend request', err.message);
-    throw err;
-  }
+  const sender = await getUserById(userId);
+  const recipient = await getUserById(targetUserId);
+  if (!sender || !recipient) return null;
+
+  const senderRequests = Array.isArray(sender.friendRequests) ? sender.friendRequests : [];
+  const recipientRequests = Array.isArray(recipient.friendRequests) ? recipient.friendRequests : [];
+
+  const nextSenderRequests = senderRequests.filter((request) => String(request.requestId) !== requestId);
+  const nextRecipientRequests = recipientRequests.filter((request) => String(request.requestId) !== requestId);
+  nextSenderRequests.push(outgoingRequest);
+  nextRecipientRequests.push(incomingRequest);
+
+  await updateUserById(userId, { friendRequests: nextSenderRequests });
+  await updateUserById(targetUserId, { friendRequests: nextRecipientRequests });
+
+  return outgoingRequest;
 }
 
 async function getFriendRequest(userId, targetUserId) {
   if (!userId || !targetUserId) return null;
-  if (!USE_DEV_STORE) await loadTableSchema();
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
-    return items.find(
-      (item) => item.itemType === 'FRIEND_REQUEST' &&
-        String(item.userId) === String(userId) &&
-        String(item.targetUserId) === String(targetUserId)
-    ) || null;
+  const recipient = await getUserById(targetUserId);
+  if (recipient) {
+    const request = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).find((item) => {
+      const sameRequest = String(item.requestId || '') === `${String(userId)}|${String(targetUserId)}`;
+      const sameIds = String(item.senderId || item.userId || '') === String(userId) && String(item.receiverId || item.recipientId || item.targetUserId || '') === String(targetUserId);
+      return sameRequest || sameIds;
+    });
+    if (request) return request;
   }
 
-  try {
-    const result = await ddb.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        PK: `${FRIEND_PREFIX}${userId}`,
-        SK: `${FRIEND_PREFIX}${targetUserId}`,
-      },
-    }));
-    return result.Item || null;
-  } catch (err) {
-    Logger.error('getFriendRequest', 'Failed to get friend request', err.message);
-    return null;
-  }
+  const sender = await getUserById(userId);
+  if (!sender) return null;
+  return (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).find((item) => {
+    const sameRequest = String(item.requestId || '') === `${String(userId)}|${String(targetUserId)}`;
+    const sameIds = String(item.senderId || item.userId || '') === String(userId) && String(item.receiverId || item.recipientId || item.targetUserId || '') === String(targetUserId);
+    return sameRequest || sameIds;
+  }) || null;
 }
 
 async function queryFriendRequestsForUser(userId, direction = 'incoming') {
   if (!userId) return [];
-  if (!USE_DEV_STORE) await loadTableSchema();
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
-    if (direction === 'incoming') {
-      return items.filter((item) =>
-        item.itemType === 'FRIEND_REQUEST' &&
-        String(item.targetUserId) === String(userId) &&
-        item.status === 'pending'
-      );
-    } else {
-      // outgoing
-      return items.filter((item) =>
-        item.itemType === 'FRIEND_REQUEST' &&
-        String(item.userId) === String(userId) &&
-        item.status === 'pending'
-      );
-    }
+  const user = await getUserById(userId);
+  if (!user) return [];
+
+  const requests = Array.isArray(user.friendRequests) ? user.friendRequests : [];
+  if (direction === 'incoming') {
+    return requests.filter((item) => item && String(item.receiverId || item.recipientId || item.targetUserId || item.to?.userId || '') === String(userId) && String(item.status).toLowerCase() === 'pending');
   }
 
-  try {
-    if (direction === 'incoming') {
-      // Query where targetUserId = userId
-      const result = await ddb.send(new ScanCommand({
-        TableName: TABLE_NAME,
-        FilterExpression: 'itemType = :type AND targetUserId = :userId AND #status = :pending',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':type': 'FRIEND_REQUEST',
-          ':userId': userId,
-          ':pending': 'pending',
-        },
-      }));
-      return result.Items || [];
-    } else {
-      // Query where userId = userId (outgoing)
-      const result = await ddb.send(new ScanCommand({
-        TableName: TABLE_NAME,
-        FilterExpression: 'itemType = :type AND userId = :userId AND #status = :pending',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':type': 'FRIEND_REQUEST',
-          ':userId': userId,
-          ':pending': 'pending',
-        },
-      }));
-      return result.Items || [];
-    }
-  } catch (err) {
-    Logger.error('queryFriendRequestsForUser', `Failed to query ${direction} friend requests`, err.message);
-    return [];
-  }
+  return requests.filter((item) => item && String(item.senderId || item.userId) === String(userId) && String(item.status).toLowerCase() === 'pending');
 }
 
 async function acceptFriendRequest(userId, targetUserId) {
   if (!userId || !targetUserId) return null;
-  if (!USE_DEV_STORE) await loadTableSchema();
 
+  const requestId = `${String(userId)}|${String(targetUserId)}`;
   const now = new Date().toISOString();
-  const friendRef1 = { friendId: targetUserId, addedAt: now };
-  const friendRef2 = { friendId: userId, addedAt: now };
+  const sender = await getUserById(userId);
+  const recipient = await getUserById(targetUserId);
+  if (!sender || !recipient) return null;
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
+  const senderRequests = Array.isArray(sender.friendRequests) ? sender.friendRequests : [];
+  const recipientRequests = Array.isArray(recipient.friendRequests) ? recipient.friendRequests : [];
 
-    // Mark request as accepted
-    const request = items.find(
-      (item) => item.itemType === 'FRIEND_REQUEST' &&
-        String(item.userId) === String(userId) &&
-        String(item.targetUserId) === String(targetUserId)
-    );
-    if (request) {
-      request.status = 'accepted';
-      request.updatedAt = now;
+  const nextSenderRequests = senderRequests.map((request) => {
+    if (String(request.requestId || '') !== requestId && String(request.senderId || request.userId || '') !== String(userId)) {
+      return request;
     }
+    return { ...request, status: 'accepted', updatedAt: now };
+  });
 
-    // Add both users' friend lists
-    let user1 = items.find((item) => item.itemType === 'USER' && String(item.userId) === String(userId));
-    let user2 = items.find((item) => item.itemType === 'USER' && String(item.userId) === String(targetUserId));
-
-    if (user1) {
-      user1.friends = Array.isArray(user1.friends) ? user1.friends : [];
-      if (!user1.friends.some((f) => String(f.friendId) === String(targetUserId))) {
-        user1.friends.push(friendRef1);
-      }
-      user1.friendIds = user1.friends.map((f) => f.friendId);
-      user1.updatedAt = now;
+  const nextRecipientRequests = recipientRequests.map((request) => {
+    if (String(request.requestId || '') !== requestId && String(request.senderId || request.userId || '') !== String(userId)) {
+      return request;
     }
+    return { ...request, status: 'accepted', updatedAt: now };
+  });
 
-    if (user2) {
-      user2.friends = Array.isArray(user2.friends) ? user2.friends : [];
-      if (!user2.friends.some((f) => String(f.friendId) === String(userId))) {
-        user2.friends.push(friendRef2);
-      }
-      user2.friendIds = user2.friends.map((f) => f.friendId);
-      user2.updatedAt = now;
-    }
+  const senderFriends = Array.isArray(sender.friends) ? sender.friends : [];
+  const recipientFriends = Array.isArray(recipient.friends) ? recipient.friends : [];
+  const senderFriendIds = senderFriends.map((friend) => String(friend.friendId));
+  const recipientFriendIds = recipientFriends.map((friend) => String(friend.friendId));
 
-    saveDevStore(items);
-    return request;
-  }
+  const senderHasFriend = senderFriendIds.includes(String(targetUserId));
+  const recipientHasFriend = recipientFriendIds.includes(String(userId));
 
-  try {
-    // Update request status
-    await ddb.send(new UpdateCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        PK: `${FRIEND_PREFIX}${userId}`,
-        SK: `${FRIEND_PREFIX}${targetUserId}`,
-      },
-      UpdateExpression: 'SET #status = :accepted, updatedAt = :now',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':accepted': 'accepted',
-        ':now': now,
-      },
-    }));
+  const nextSenderFriends = senderHasFriend ? senderFriends : [...senderFriends, { friendId: targetUserId, addedAt: now }];
+  const nextRecipientFriends = recipientHasFriend ? recipientFriends : [...recipientFriends, { friendId: userId, addedAt: now }];
 
-    // Add to both users' friend lists
-    await Promise.all([
-      ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: `${USER_PREFIX}${userId}`, SK: METADATA_SK },
-        UpdateExpression: 'SET friends = list_append(if_not_exists(friends, :emptyList), :ref1), friendIds = list_append(if_not_exists(friendIds, :emptyList), :id1), updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':emptyList': [],
-          ':ref1': [friendRef1],
-          ':id1': [targetUserId],
-          ':now': now,
-        },
-      })),
-      ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: `${USER_PREFIX}${targetUserId}`, SK: METADATA_SK },
-        UpdateExpression: 'SET friends = list_append(if_not_exists(friends, :emptyList), :ref2), friendIds = list_append(if_not_exists(friendIds, :emptyList), :id2), updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':emptyList': [],
-          ':ref2': [friendRef2],
-          ':id2': [userId],
-          ':now': now,
-        },
-      })),
-    ]);
+  await updateUserById(userId, {
+    friendRequests: nextSenderRequests,
+    friends: nextSenderFriends,
+    friendIds: nextSenderFriends.map((friend) => friend.friendId),
+  });
+  await updateUserById(targetUserId, {
+    friendRequests: nextRecipientRequests,
+    friends: nextRecipientFriends,
+    friendIds: nextRecipientFriends.map((friend) => friend.friendId),
+  });
 
-    return { status: 'accepted' };
-  } catch (err) {
-    Logger.error('acceptFriendRequest', 'Failed to accept friend request', err.message);
-    throw err;
-  }
+  return { requestId, status: 'accepted' };
 }
 
 async function denyFriendRequest(userId, targetUserId) {
   if (!userId || !targetUserId) return null;
-  if (!USE_DEV_STORE) await loadTableSchema();
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
-    const index = items.findIndex(
-      (item) => item.itemType === 'FRIEND_REQUEST' &&
-        String(item.userId) === String(userId) &&
-        String(item.targetUserId) === String(targetUserId)
-    );
-    if (index >= 0) {
-      items.splice(index, 1);
-      saveDevStore(items);
-      return true;
-    }
-    return false;
-  }
+  const requestId = `${String(userId)}|${String(targetUserId)}`;
+  const sender = await getUserById(userId);
+  const recipient = await getUserById(targetUserId);
+  if (!sender || !recipient) return false;
 
-  try {
-    await ddb.send(new DeleteCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        PK: `${FRIEND_PREFIX}${userId}`,
-        SK: `${FRIEND_PREFIX}${targetUserId}`,
-      },
-    }));
-    return true;
-  } catch (err) {
-    Logger.error('denyFriendRequest', 'Failed to deny friend request', err.message);
-    return false;
-  }
+  const nextSenderRequests = (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).filter((request) => String(request.requestId || '') !== requestId);
+  const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).filter((request) => String(request.requestId || '') !== requestId);
+
+  await updateUserById(userId, { friendRequests: nextSenderRequests });
+  await updateUserById(targetUserId, { friendRequests: nextRecipientRequests });
+  return true;
 }
 
 async function removeFriend(userId, friendId) {
   if (!userId || !friendId) return null;
-  if (!USE_DEV_STORE) await loadTableSchema();
 
-  const now = new Date().toISOString();
+  const user = await getUserById(userId);
+  const target = await getUserById(friendId);
+  if (!user || !target) return false;
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
+  const nextUserFriends = (Array.isArray(user.friends) ? user.friends : []).filter((friend) => String(friend.friendId) !== String(friendId));
+  const nextTargetFriends = (Array.isArray(target.friends) ? target.friends : []).filter((friend) => String(friend.friendId) !== String(userId));
 
-    // Remove from both users' friends lists
-    let user1 = items.find((item) => item.itemType === 'USER' && String(item.userId) === String(userId));
-    let user2 = items.find((item) => item.itemType === 'USER' && String(item.userId) === String(friendId));
-
-    if (user1) {
-      user1.friends = Array.isArray(user1.friends)
-        ? user1.friends.filter((f) => String(f.friendId) !== String(friendId))
-        : [];
-      user1.friendIds = user1.friends.map((f) => f.friendId);
-      user1.updatedAt = now;
-    }
-
-    if (user2) {
-      user2.friends = Array.isArray(user2.friends)
-        ? user2.friends.filter((f) => String(f.friendId) !== String(userId))
-        : [];
-      user2.friendIds = user2.friends.map((f) => f.friendId);
-      user2.updatedAt = now;
-    }
-
-    saveDevStore(items);
-    return true;
-  }
-
-  try {
-    await Promise.all([
-      ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: `${USER_PREFIX}${userId}`, SK: METADATA_SK },
-        UpdateExpression: 'SET friends = list_filter(friends, :id), friendIds = list_filter(friendIds, :id), updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':id': friendId,
-          ':now': now,
-        },
-      })),
-      ddb.send(new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: `${USER_PREFIX}${friendId}`, SK: METADATA_SK },
-        UpdateExpression: 'SET friends = list_filter(friends, :id), friendIds = list_filter(friendIds, :id), updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':id': userId,
-          ':now': now,
-        },
-      })),
-    ]);
-    return true;
-  } catch (err) {
-    Logger.error('removeFriend', 'Failed to remove friend', err.message);
-    return false;
-  }
+  await updateUserById(userId, {
+    friends: nextUserFriends,
+    friendIds: nextUserFriends.map((friend) => friend.friendId),
+  });
+  await updateUserById(friendId, {
+    friends: nextTargetFriends,
+    friendIds: nextTargetFriends.map((friend) => friend.friendId),
+  });
+  return true;
 }
 
 async function listFriends(userId) {
   if (!userId) return [];
-  if (!USE_DEV_STORE) await loadTableSchema();
 
-  if (USE_DEV_STORE) {
-    const items = loadDevStore();
-    const user = items.find((item) => item.itemType === 'USER' && String(item.userId) === String(userId));
-    if (!user) return [];
-    const friends = Array.isArray(user.friends) ? user.friends : [];
-    return friends.map((f) => f.friendId);
-  }
+  const user = await getUserById(userId);
+  if (!user) return [];
 
-  try {
-    const result = await ddb.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { PK: `${USER_PREFIX}${userId}`, SK: METADATA_SK },
-      ProjectionExpression: 'friendIds',
-    }));
-    return (result.Item?.friendIds) || [];
-  } catch (err) {
-    Logger.error('listFriends', 'Failed to list friends', err.message);
-    return [];
-  }
+  const friendIds = Array.isArray(user.friendIds) && user.friendIds.length
+    ? user.friendIds
+    : (Array.isArray(user.friends) ? user.friends.map((friend) => String(friend.friendId)) : []);
+  return friendIds.map((friendId) => String(friendId));
 }
 
 module.exports = {

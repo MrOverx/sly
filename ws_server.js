@@ -169,6 +169,7 @@ function buildCompleteUserProfile(user) {
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
+const { buildFriendRequestPayload, buildCompleteUserProfile: buildFriendCompleteUserProfile } = require('./utils/friendPayloadUtils');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup, stopOtpCleanup } = require('./utils/otpStore');
 const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
@@ -1902,7 +1903,17 @@ app.post('/friends/add', asyncHandler(async (req, res) => {
       createdAt: request.createdAt,
     });
 
-    return sendSuccess(res, { request }, 'Friend request sent successfully');
+    const shapedRequest = buildFriendRequestPayload(request);
+    const shapedSender = buildFriendCompleteUserProfile(senderUser);
+    const shapedRecipient = buildFriendCompleteUserProfile(recipientUser);
+
+    return sendSuccess(res, {
+      request: shapedRequest,
+      currentUser: shapedSender,
+      friend: shapedRecipient,
+      sender: shapedSender,
+      recipient: shapedRecipient,
+    }, 'Friend request sent successfully');
   } catch (err) {
     Logger.error('friends/add', 'Error sending friend request', err.message);
     return sendError(res, 500, 'Failed to send friend request', { details: err.message });
@@ -1968,7 +1979,17 @@ app.post('/friends/request/send', asyncHandler(async (req, res) => {
       createdAt: request.createdAt,
     });
 
-    return sendSuccess(res, { request }, 'Friend request sent successfully');
+    const shapedRequest = buildFriendRequestPayload(request);
+    const shapedSender = buildFriendCompleteUserProfile(senderUser);
+    const shapedRecipient = buildFriendCompleteUserProfile(recipientUser);
+
+    return sendSuccess(res, {
+      request: shapedRequest,
+      currentUser: shapedSender,
+      friend: shapedRecipient,
+      sender: shapedSender,
+      recipient: shapedRecipient,
+    }, 'Friend request sent successfully');
   } catch (err) {
     Logger.error('friends/request/send', 'Error sending friend request', err.message);
     return sendError(res, 500, 'Failed to send friend request', { details: err.message });
@@ -2026,9 +2047,22 @@ app.post('/friends/request/accept', asyncHandler(async (req, res) => {
       acceptedAt: new Date().toISOString(),
     });
 
+    const shapedCurrentUser = buildFriendCompleteUserProfile(updatedUser);
+    const shapedFriend = buildFriendCompleteUserProfile(senderUser);
+    const shapedRequest = buildFriendRequestPayload({
+      ...request,
+      status: 'accepted',
+      requestType: request.requestType || 'FRIEND_REQUEST_ACCEPTED',
+      isIncoming: false,
+      isOutgoing: false,
+    });
+
     return sendSuccess(res, {
-      currentUser: buildCompleteUserProfile(updatedUser),
-      friend: buildCompleteUserProfile(senderUser),
+      currentUser: shapedCurrentUser,
+      friend: shapedFriend,
+      request: shapedRequest,
+      updatedFriendsList: shapedCurrentUser?.friends || [],
+      newFriend: shapedFriend,
     }, 'Friend request accepted');
   } catch (err) {
     Logger.error('friends/request/accept', 'Error accepting friend request', err.message);
@@ -2063,7 +2097,18 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
       deniedAt: new Date().toISOString(),
     });
 
-    return sendSuccess(res, {}, 'Friend request denied');
+    return sendSuccess(res, {
+      currentUser: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      request: buildFriendRequestPayload({
+        requestId: `${userId}|${targetUserId}`,
+        status: 'denied',
+        senderId: userId,
+        receiverId: targetUserId,
+        requestType: 'FRIEND_REQUEST_DENIED',
+        isIncoming: false,
+        isOutgoing: false,
+      }),
+    }, 'Friend request denied');
   } catch (err) {
     Logger.error('friends/request/deny', 'Error denying friend request', err.message);
     return sendError(res, 500, 'Failed to deny friend request', { details: err.message });
@@ -2097,7 +2142,18 @@ app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
       cancelledAt: new Date().toISOString(),
     });
 
-    return sendSuccess(res, {}, 'Friend request cancelled');
+    return sendSuccess(res, {
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      request: buildFriendRequestPayload({
+        requestId: `${userId}|${targetUserId}`,
+        status: 'cancelled',
+        senderId: userId,
+        receiverId: targetUserId,
+        requestType: 'FRIEND_REQUEST_CANCELLED',
+        isIncoming: false,
+        isOutgoing: false,
+      }),
+    }, 'Friend request cancelled');
   } catch (err) {
     Logger.error('friends/request/cancel', 'Error cancelling friend request', err.message);
     return sendError(res, 500, 'Failed to cancel friend request', { details: err.message });
@@ -2130,7 +2186,13 @@ app.post('/friends/remove', asyncHandler(async (req, res) => {
       removedAt: new Date().toISOString(),
     });
 
-    return sendSuccess(res, {}, 'Friend removed successfully');
+    const updatedUser = await getUserById(userId);
+    const updatedTarget = await getUserById(friendId);
+    return sendSuccess(res, {
+      currentUser: buildFriendCompleteUserProfile(updatedUser),
+      friend: buildFriendCompleteUserProfile(updatedTarget),
+      updatedFriendsList: buildFriendCompleteUserProfile(updatedUser)?.friends || [],
+    }, 'Friend removed successfully');
   } catch (err) {
     Logger.error('friends/remove', 'Error removing friend', err.message);
     return sendError(res, 500, 'Failed to remove friend', { details: err.message });
@@ -2158,8 +2220,9 @@ app.get('/friends/list', asyncHandler(async (req, res) => {
     const friends = await getUsersByIds(friendIds);
 
     return sendSuccess(res, {
-      friends: friends.map((f) => buildCompleteUserProfile(f)),
+      friends: friends.map((f) => buildFriendCompleteUserProfile(f)),
       count: friends.length,
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
     }, 'Friends list retrieved');
   } catch (err) {
     Logger.error('friends/list', 'Error retrieving friends list', err.message);
@@ -2190,20 +2253,18 @@ app.get('/friends/requests/incoming', asyncHandler(async (req, res) => {
     const enrichedRequests = await Promise.all(
       requests.map(async (req) => {
         const sender = await getUserById(req.userId);
-        return {
-          requestId: req.requestId,
-          userId: req.userId,
-          targetUserId: req.targetUserId,
-          status: req.status,
-          createdAt: req.createdAt,
-          sender: sender ? buildCompleteUserProfile(sender) : null,
-        };
+        return buildFriendRequestPayload({
+          ...req,
+          sender: sender ? buildFriendCompleteUserProfile(sender) : null,
+          receiver: buildFriendCompleteUserProfile(await getUserById(userId)),
+        });
       })
     );
 
     return sendSuccess(res, {
       requests: enrichedRequests,
       count: enrichedRequests.length,
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
     }, 'Incoming friend requests retrieved');
   } catch (err) {
     Logger.error('friends/requests/incoming', 'Error retrieving incoming requests', err.message);
@@ -2233,21 +2294,20 @@ app.get('/friends/requests/outgoing', asyncHandler(async (req, res) => {
     // Fetch recipient profiles for display
     const enrichedRequests = await Promise.all(
       requests.map(async (req) => {
-        const recipient = await getUserById(req.targetUserId);
-        return {
-          requestId: req.requestId,
-          userId: req.userId,
-          targetUserId: req.targetUserId,
-          status: req.status,
-          createdAt: req.createdAt,
-          recipient: recipient ? buildCompleteUserProfile(recipient) : null,
-        };
+        const recipient = await getUserById(req.targetUserId || req.receiverId || req.recipientId || req.targetUserId);
+        return buildFriendRequestPayload({
+          ...req,
+          recipient: recipient ? buildFriendCompleteUserProfile(recipient) : null,
+          receiver: recipient ? buildFriendCompleteUserProfile(recipient) : null,
+          sender: buildFriendCompleteUserProfile(await getUserById(userId)),
+        });
       })
     );
 
     return sendSuccess(res, {
       requests: enrichedRequests,
       count: enrichedRequests.length,
+      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
     }, 'Outgoing friend requests retrieved');
   } catch (err) {
     Logger.error('friends/requests/outgoing', 'Error retrieving outgoing requests', err.message);
