@@ -782,16 +782,72 @@ async function persistFriendRequestOnUser(userId, requestItem, status = 'pending
     ? removeFriendRequestReference(existingRequests, requestItem, userId)
     : mergeFriendRequestReference(existingRequests, requestItem, status, userId, requestMetadata);
 
-  // ✅ IMPORTANT: Always pass the complete user profile when updating to preserve all user fields
-  // This prevents data loss when persisting friend request changes.
-  const updatedUser = await updateUserById(userId, {
-    ...currentUser,  // Spread all existing user fields first
-    friends: nextFriends,  // Then override only the fields we're changing
-    friendIds: nextFriendIds,
-    friendRequests: nextRequests,
-  });
+  // If we're removing the request (accepted/denied), fall back to the
+  // existing update path which computes the full nextRequests array/object
+  // and writes the complete attribute value to ensure deterministic state.
+  if (shouldRemoveFromUser) {
+    const updatedUser = await updateUserById(userId, {
+      ...currentUser,
+      friends: nextFriends,
+      friendIds: nextFriendIds,
+      friendRequests: nextRequests,
+    });
+    return updatedUser;
+  }
 
-  return updatedUser;
+  // For adding/merging a pending request, prefer a non-destructive DynamoDB
+  // UpdateCommand that appends the new request to the existing list. This
+  // avoids accidentally overwriting other user attributes and is resilient
+  // when multiple concurrent writes occur.
+  try {
+    const referenceToAdd = buildFriendRequestReference(requestItem, status, userId, requestMetadata);
+
+    // If the user's friendRequests uses the { sent: [], received: [] } shape,
+    // append to the appropriate bucket instead of the top-level list.
+    if (isObjectFriendRequests(currentUser?.friendRequests)) {
+      const bucket = (normalizeIdValue(userId) === normalizeIdValue(referenceToAdd.userId || referenceToAdd.senderId)) ? 'sent' : 'received';
+      const exprNames = { '#fr': 'friendRequests', '#b': bucket, '#updatedAt': 'updatedAt' };
+      const exprValues = { ':empty': [], ':toAdd': [referenceToAdd], ':now': new Date().toISOString() };
+      const updateExpression = 'SET #fr.#b = list_append(if_not_exists(#fr.#b, :empty), :toAdd), #updatedAt = :now';
+      const params = {
+        TableName: TABLE_NAME,
+        Key: buildUserPrimaryKey(userId),
+        UpdateExpression: updateExpression,
+        ExpressionAttributeNames: exprNames,
+        ExpressionAttributeValues: exprValues,
+        ReturnValues: 'ALL_NEW',
+      };
+      const result = await ddb.send(new UpdateCommand(params));
+      const updatedItem = result.Attributes ? normalizeDdbItem(result.Attributes) : await getUserById(userId);
+      return updatedItem;
+    }
+
+    // Default: top-level array shape; append to friendRequests array
+    const exprNames = { '#fr': 'friendRequests', '#updatedAt': 'updatedAt' };
+    const exprValues = { ':empty': [], ':toAdd': [referenceToAdd], ':now': new Date().toISOString() };
+    const updateExpression = 'SET #fr = list_append(if_not_exists(#fr, :empty), :toAdd), #updatedAt = :now';
+    const params = {
+      TableName: TABLE_NAME,
+      Key: buildUserPrimaryKey(userId),
+      UpdateExpression: updateExpression,
+      ExpressionAttributeNames: exprNames,
+      ExpressionAttributeValues: exprValues,
+      ReturnValues: 'ALL_NEW',
+    };
+    const result = await ddb.send(new UpdateCommand(params));
+    const updatedItem = result.Attributes ? normalizeDdbItem(result.Attributes) : await getUserById(userId);
+    return updatedItem;
+  } catch (e) {
+    Logger.warn('persistFriendRequestOnUser', 'Failed to append friend request via UpdateCommand, falling back to full update', e && e.message);
+    // Fallback to previous full-profile update to guarantee persistence
+    const updatedUser = await updateUserById(userId, {
+      ...currentUser,
+      friends: nextFriends,
+      friendIds: nextFriendIds,
+      friendRequests: nextRequests,
+    });
+    return updatedUser;
+  }
 }
 
 function serializeFriendRequestForClient(request, currentUserId, senderUser = null, recipientUser = null) {
@@ -2311,8 +2367,20 @@ async function acceptFriendRequestTransaction(requestItem, requestMetadata = {})
     // disallows multiple operations on the same item within a single
     // transaction). If the sender update is already present in transactItems
     // (it is), find it and set the notif value accordingly.
-    const senderUpdate = transactItems.find((ti) => ti.Update && ti.Update.Key && ti.Update.Key.PK === senderUserKey.PK && ti.Update.Key.SK === senderUserKey.SK);
-    if (senderUpdate && senderUpdate.Update.ExpressionAttributeValues) {
+    // Find the matching Update operation for the sender's user record.
+    // Use deep key comparison because the attribute name for the hash
+    // and range keys may vary (e.g. 'PK' vs 'userId') depending on
+    // configuration. JSON stringification is a simple, robust way to
+    // compare key objects here.
+    const senderUpdate = transactItems.find((ti) => {
+      if (!(ti.Update && ti.Update.Key)) return false;
+      try {
+        return JSON.stringify(ti.Update.Key) === JSON.stringify(senderUserKey);
+      } catch (_) {
+        return false;
+      }
+    });
+    if (senderUpdate && senderUpdate.Update && senderUpdate.Update.ExpressionAttributeValues) {
       senderUpdate.Update.ExpressionAttributeValues[':notifToAdd'] = [notificationForSender];
     }
   } catch (e) {
