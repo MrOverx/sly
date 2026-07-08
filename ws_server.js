@@ -1840,6 +1840,75 @@ app.get('/user/:userId', async (req, res) => {
 });
 
 // ========== FRIEND REQUEST & FRIEND LIST ENDPOINTS ==========
+
+// Frontend compatibility alias: POST /friends/add (maps friendId → targetUserId)
+app.post('/friends/add', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const { userId, friendId } = req.body;
+  if (!userId || !friendId) {
+    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  }
+
+  // Validate not self-request
+  if (userId === friendId) {
+    return sendError(res, 400, 'Cannot send friend request to yourself', 'INVALID_REQUEST');
+  }
+
+  try {
+    // 🔒 Check rate limit
+    if (!checkFriendRateLimit(userId, 'sendRequest')) {
+      return sendError(res, 429, 'Too many friend requests. Please try again later.', 'RATE_LIMIT_EXCEEDED');
+    }
+
+    // Check if already friends
+    const existingFriends = await listFriends(userId);
+    if (existingFriends.includes(String(friendId))) {
+      return sendError(res, 409, 'Already friends with this user', 'ALREADY_FRIENDS');
+    }
+
+    // Check if request already pending
+    const existing = await getFriendRequest(userId, friendId);
+    if (existing && existing.status === 'pending') {
+      return sendError(res, 409, 'Friend request already pending', 'REQUEST_PENDING');
+    }
+
+    // Get user profiles
+    const senderUser = await getCachedUserProfile(userId);
+    const recipientUser = await getCachedUserProfile(friendId);
+
+    if (!senderUser || !recipientUser) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    // Create request
+    const request = await createFriendRequest(userId, friendId, {
+      senderProfile: { userId: senderUser.userId, userName: senderUser.userName },
+      recipientProfile: { userId: recipientUser.userId, userName: recipientUser.userName },
+    });
+
+    Logger.info('friends/add', '✅ Friend request created', { from: userId, to: friendId });
+
+    // 📱 Emit real-time notification to recipient
+    notifyUserOfFriendEvent(friendId, 'friend_request_received', {
+      requestId: request.requestId,
+      from: {
+        userId: senderUser.userId,
+        userName: senderUser.userName,
+        avatarColor: senderUser.avatarColor,
+      },
+      createdAt: request.createdAt,
+    });
+
+    return sendSuccess(res, { request }, 'Friend request sent successfully');
+  } catch (err) {
+    Logger.error('friends/add', 'Error sending friend request', err.message);
+    return sendError(res, 500, 'Failed to send friend request', { details: err.message });
+  }
+}));
+
 // Send friend request: POST /friends/request/send
 app.post('/friends/request/send', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
