@@ -37,7 +37,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
   DynamoDBDocumentClient = null;
 }
 const { Logger } = require('./logger');
-const { normalizeProfileImageReference, resolveProfileImageReference } = require('./friendPayloadUtils');
+const { resolveProfileImageReference } = require('./friendPayloadUtils');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -207,52 +207,6 @@ const TTL_ATTRIBUTE = 'expiresAt';
 function normalizeEmail(email) {
   if (!email || typeof email !== 'string') return null;
   return email.trim().toLowerCase();
-}
-
-function normalizeProfileImageReference(value) {
-  if (value == null) return null;
-  const stringValue = String(value).trim();
-  if (!stringValue) return null;
-  if (stringValue.length > MAX_PROFILE_IMAGE_URL_LENGTH) return null;
-
-  const lower = stringValue.toLowerCase();
-  if (lower.startsWith('data:')) {
-    return null;
-  }
-
-  if (lower.startsWith('/')) {
-    return null;
-  }
-
-  if (lower.includes('upload') && !/^https?:\/\//i.test(stringValue)) {
-    return null;
-  }
-
-  if (lower.startsWith('file:')) {
-    return null;
-  }
-
-  if (lower.startsWith('c:')) {
-    return null;
-  }
-
-  if (lower.startsWith('blob:')) {
-    return null;
-  }
-
-  if (lower.startsWith('content:')) {
-    return null;
-  }
-
-  if (lower.startsWith('app://')) {
-    return null;
-  }
-
-  if (stringValue.length > MAX_INLINE_PROFILE_IMAGE_URL_LENGTH) {
-    return null;
-  }
-
-  return stringValue;
 }
 
 function normalizeAuthType(value) {
