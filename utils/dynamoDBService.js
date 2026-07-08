@@ -323,9 +323,10 @@ function toIso(value) {
 
 function shouldPreserveProtectedField(field, value) {
   if (value === undefined) return true;
-  if (field === 'email' || field === 'passwordHash' || field === 'userId') {
+  if (field === 'email' || field === 'passwordHash' || field === 'userId' || field === 'PK' || field === 'SK' || field === 'itemType' || field === 'createdAt') {
     if (value === null) return true;
     if (typeof value === 'string' && value.trim().length === 0) return true;
+    return true;
   }
   return false;
 }
