@@ -171,7 +171,7 @@ function buildCompleteUserProfile(user) {
 const { sendError, sendSuccess } = require('./utils/responseHandler');
 const { validateUserData } = require('./utils/userRegistration');
 const { userCache } = require('./utils/userCache');
-const { normalizeFriendRequestStatus, buildFriendRequestPayload, buildCompleteUserProfile: buildFriendCompleteUserProfile } = require('./utils/friendPayloadUtils');
+const { normalizeFriendRequestStatus, buildFriendRequestPayload, buildCompleteUserProfile: buildFriendCompleteUserProfile, resolveProfileImageReference, normalizeProfileImageReference } = require('./utils/friendPayloadUtils');
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup, stopOtpCleanup } = require('./utils/otpStore');
 const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
@@ -979,6 +979,55 @@ function getSafeProfileImageReference(value) {
     return trimmed;
   }
   return null;
+}
+
+async function resolveUserProfileMetadata(
+  userId,
+  userMeta = {},
+  fallbackName = 'User',
+  fallbackColor = '#128C7E',
+  fallbackLetter = 'U',
+) {
+  const normalizedUserId = normalizeId(userId);
+  const meta = {
+    userId: normalizedUserId,
+    ...(userMeta || {}),
+  };
+
+  const hasImage = Boolean(resolveProfileImageReference(meta) || normalizeProfileImageReference(meta.profileImagePath) || normalizeProfileImageReference(meta.profileImageUrl));
+  const hasName = Boolean(meta.userName);
+  const hasLetter = Boolean(meta.avatarLetter);
+  const hasColor = Boolean(meta.avatarColor);
+
+  if ((!hasImage || !hasName || !hasLetter || !hasColor) && normalizedUserId) {
+    try {
+      const dbUser = await getUserById(normalizedUserId);
+      if (dbUser) {
+        const completeProfile = buildCompleteUserProfile(dbUser) || {};
+        meta.userName = meta.userName || completeProfile.userName || completeProfile.name || fallbackName;
+        meta.avatarColor = meta.avatarColor || completeProfile.avatarColor || fallbackColor;
+        meta.avatarLetter = meta.avatarLetter || completeProfile.avatarLetter || (meta.userName ? String(meta.userName).charAt(0).toUpperCase() : fallbackLetter);
+        meta.profileImagePath = meta.profileImagePath || completeProfile.profileImagePath || completeProfile.profileImageUrl || null;
+        meta.profileImageUrl = meta.profileImageUrl || completeProfile.profileImageUrl || completeProfile.profileImagePath || null;
+      }
+    } catch (error) {
+      Logger.warn('resolveUserProfileMetadata', 'Unable to fetch DB profile for user', { userId: normalizedUserId, error: error && error.message });
+    }
+  }
+
+  const resolvedName = String(meta.userName || fallbackName || normalizedUserId || 'User').trim() || 'User';
+  const resolvedColor = String(meta.avatarColor || fallbackColor || '#128C7E').trim() || '#128C7E';
+  const resolvedLetter = String(meta.avatarLetter || resolvedName[0] || fallbackLetter || 'U').trim().toUpperCase();
+  const resolvedImage = resolveProfileImageReference(meta) || normalizeProfileImageReference(meta.profileImagePath) || normalizeProfileImageReference(meta.profileImageUrl) || null;
+
+  return {
+    userId: normalizedUserId,
+    userName: resolvedName,
+    avatarColor: resolvedColor,
+    avatarLetter: resolvedLetter,
+    profileImageUrl: resolvedImage,
+    profileImagePath: resolvedImage,
+  };
 }
 
 function buildParticipant(userId, meta, role) {
@@ -3961,6 +4010,40 @@ io.on('connection', (socket) => {
         isOnline,
       });
 
+      // Maintain an in-memory online users set for quick presence checks
+      if (!global.onlineUsers) global.onlineUsers = new Set();
+      try {
+        if (isOnline) {
+          global.onlineUsers.add(userId);
+          // also map userSockets if not already set
+          if (!userSockets.get(userId)) userSockets.set(userId, socket.id);
+        } else {
+          global.onlineUsers.delete(userId);
+        }
+      } catch (e) {
+        Logger.warn('presence', 'Failed to update onlineUsers set', { userId, error: e && e.message });
+      }
+
+      // Emit presence update to the user's friends only (reduce noise)
+      (async () => {
+        try {
+          const friendsList = await listFriends(userId).catch(() => null) || [];
+          const friendIds = (Array.isArray(friendsList) ? friendsList : []).map(f => (f.userId || f.id || f.friendId || '').toString()).filter(Boolean);
+          // Notify each friend individually (queues if offline)
+          for (const fid of friendIds) {
+            notifyUserOfFriendEvent(fid, 'friend_status_update', {
+              userId,
+              isOnline,
+              userName: statusPayload.userName,
+              timestamp: statusPayload.timestamp,
+            });
+          }
+        } catch (e) {
+          Logger.warn('presence', 'Error notifying friends of presence change', { userId, error: e && e.message });
+        }
+      })();
+
+      // Also emit user_online_status globally for compatibility with older clients
       io.emit('user_online_status', statusPayload);
       if (typeof callback === 'function') callback({ success: true, status: statusPayload });
     } catch (err) {
