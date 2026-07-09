@@ -37,7 +37,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
   DynamoDBDocumentClient = null;
 }
 const { Logger } = require('./logger');
-const { resolveProfileImageReference } = require('./friendPayloadUtils');
+const { resolveProfileImageReference, normalizeProfileImageReference } = require('./friendPayloadUtils');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -1376,16 +1376,18 @@ async function acceptFriendRequest(userId, targetUserId) {
 
   const nextSenderFriends = senderHasFriend ? senderFriends : [...senderFriends, { friendId: targetUserId, addedAt: now }];
   const nextRecipientFriends = recipientHasFriend ? recipientFriends : [...recipientFriends, { friendId: userId, addedAt: now }];
+  const nextSenderFriendIds = nextSenderFriends.map((friend) => String(friend.friendId)).filter(Boolean);
+  const nextRecipientFriendIds = nextRecipientFriends.map((friend) => String(friend.friendId)).filter(Boolean);
 
   await updateUserById(userId, {
     friendRequests: nextSenderRequests,
     friends: nextSenderFriends,
-    friendIds: nextSenderFriends.map((friend) => friend.friendId),
+    friendIds: nextSenderFriendIds,
   });
   await updateUserById(targetUserId, {
     friendRequests: nextRecipientRequests,
     friends: nextRecipientFriends,
-    friendIds: nextRecipientFriends.map((friend) => friend.friendId),
+    friendIds: nextRecipientFriendIds,
   });
 
   return { requestId, status: 'accepted' };
@@ -1428,14 +1430,16 @@ async function removeFriend(userId, friendId) {
 
   const nextUserFriends = (Array.isArray(user.friends) ? user.friends : []).filter((friend) => String(friend.friendId) !== String(friendId));
   const nextTargetFriends = (Array.isArray(target.friends) ? target.friends : []).filter((friend) => String(friend.friendId) !== String(userId));
+  const nextUserFriendIds = nextUserFriends.map((friend) => String(friend.friendId)).filter(Boolean);
+  const nextTargetFriendIds = nextTargetFriends.map((friend) => String(friend.friendId)).filter(Boolean);
 
   await updateUserById(userId, {
     friends: nextUserFriends,
-    friendIds: nextUserFriends.map((friend) => friend.friendId),
+    friendIds: nextUserFriendIds,
   });
   await updateUserById(friendId, {
     friends: nextTargetFriends,
-    friendIds: nextTargetFriends.map((friend) => friend.friendId),
+    friendIds: nextTargetFriendIds,
   });
   return true;
 }
