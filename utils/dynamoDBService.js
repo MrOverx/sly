@@ -37,7 +37,10 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
   DynamoDBDocumentClient = null;
 }
 const { Logger } = require('./logger');
-const { resolveProfileImageReference } = require('./friendPayloadUtils');
+const {
+  resolveProfileImageReference,
+  normalizeProfileImageReference,
+} = require('./friendPayloadUtils');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
