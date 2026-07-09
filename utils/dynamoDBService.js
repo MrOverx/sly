@@ -1338,6 +1338,20 @@ async function queryFriendRequestsForUser(userId, direction = 'incoming') {
   return requests.filter((item) => item && String(item.requestType || '').toUpperCase().includes('OUTGOING') && String(item.status).toLowerCase() === 'pending');
 }
 
+function _matchesFriendRequest(request, requestId, userId, targetUserId) {
+  const candidateId = String(request?.requestId || '').trim();
+  if (candidateId && candidateId === requestId) return true;
+
+  const sender = String(
+    request?.senderId || request?.userId || request?.fromUserId || request?.sender?.userId || request?.sender?.id || '',
+  ).trim();
+  const receiver = String(
+    request?.receiverId || request?.recipientId || request?.targetUserId || request?.friendId || request?.receiver?.userId || request?.receiver?.id || '',
+  ).trim();
+
+  return sender === String(userId).trim() && receiver === String(targetUserId).trim();
+}
+
 async function acceptFriendRequest(userId, targetUserId) {
   if (!userId || !targetUserId) return null;
 
@@ -1350,21 +1364,12 @@ async function acceptFriendRequest(userId, targetUserId) {
   const senderRequests = Array.isArray(sender.friendRequests) ? sender.friendRequests : [];
   const recipientRequests = Array.isArray(recipient.friendRequests) ? recipient.friendRequests : [];
 
-  const nextSenderRequests = senderRequests.map((request) => {
-    if (String(request.requestId || '') !== requestId) {
-      return request;
-    }
-    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
-    return { ...rest, status: 'accepted', isRead: Boolean(request.isRead) };
-  });
-
-  const nextRecipientRequests = recipientRequests.map((request) => {
-    if (String(request.requestId || '') !== requestId) {
-      return request;
-    }
-    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
-    return { ...rest, status: 'accepted', isRead: Boolean(request.isRead) };
-  });
+  const nextSenderRequests = senderRequests.filter(
+    (request) => !_matchesFriendRequest(request, requestId, userId, targetUserId),
+  );
+  const nextRecipientRequests = recipientRequests.filter(
+    (request) => !_matchesFriendRequest(request, requestId, userId, targetUserId),
+  );
 
   const senderFriends = Array.isArray(sender.friends) ? sender.friends : [];
   const recipientFriends = Array.isArray(recipient.friends) ? recipient.friends : [];
@@ -1401,20 +1406,12 @@ async function denyFriendRequest(userId, targetUserId) {
   const recipient = await getUserById(targetUserId);
   if (!sender || !recipient) return false;
 
-  const nextSenderRequests = (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).map((request) => {
-    if (String(request.requestId || '') !== requestId) {
-      return request;
-    }
-    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
-    return { ...rest, status: 'rejected', isRead: Boolean(request.isRead) };
-  });
-  const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).map((request) => {
-    if (String(request.requestId || '') !== requestId) {
-      return request;
-    }
-    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
-    return { ...rest, status: 'rejected', isRead: Boolean(request.isRead) };
-  });
+  const nextSenderRequests = (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).filter(
+    (request) => !_matchesFriendRequest(request, requestId, userId, targetUserId),
+  );
+  const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).filter(
+    (request) => !_matchesFriendRequest(request, requestId, userId, targetUserId),
+  );
 
   await updateUserById(userId, { friendRequests: nextSenderRequests });
   await updateUserById(targetUserId, { friendRequests: nextRecipientRequests });

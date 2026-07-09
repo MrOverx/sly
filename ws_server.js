@@ -2159,6 +2159,9 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
     const updatedSenderUser = await getUserById(userId);
     const updatedRecipientUser = await getUserById(targetUserId);
 
+    clearUserProfileCache(userId);
+    clearUserProfileCache(targetUserId);
+
     // 📱 Emit real-time notification to sender
     notifyUserOfFriendEvent(userId, 'friend_request_denied', {
       request: buildFriendRequestPayload({
@@ -2429,6 +2432,36 @@ app.get('/notifications', async (req, res) => {
     return sendError(res, 500, 'Error getting notifications', { details: err?.message || String(err) });
   }
 });
+
+// Clear all notifications for the current user
+app.post('/notifications/clear', asyncHandler(async (req, res) => {
+  if (!await isDatabaseConnected()) {
+    return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
+  }
+
+  const userId = normalizeId(req.body.userId || req.headers['x-user-id']);
+  if (!userId) {
+    return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+  }
+
+  try {
+    const user = await getUserById(userId);
+    if (!user) {
+      return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
+    }
+
+    await updateUserById(userId, { notifications: [] });
+    if (friendNotifications.has(userId)) {
+      friendNotifications.delete(userId);
+    }
+
+    Logger.info('notifications/clear', '✅ Cleared user notifications', { userId });
+    return sendSuccess(res, { cleared: true }, 'Notifications cleared');
+  } catch (err) {
+    Logger.error('notifications/clear', 'Error clearing notifications', err?.message || err);
+    return sendError(res, 500, 'Failed to clear notifications', { details: err?.message || String(err) });
+  }
+}));
 
 const VALID_GENDERS = ['male', 'female', 'other'];
 
