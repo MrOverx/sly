@@ -37,10 +37,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
   DynamoDBDocumentClient = null;
 }
 const { Logger } = require('./logger');
-const {
-  resolveProfileImageReference,
-  normalizeProfileImageReference,
-} = require('./friendPayloadUtils');
+const { resolveProfileImageReference } = require('./friendPayloadUtils');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -1272,7 +1269,6 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
     requestId,
     status: 'pending',
     createdAt: now,
-    senderId: userId,
     requestType: 'FRIEND_REQUEST_OUTGOING',
     isRead: false,
     isIncoming: false,
@@ -1358,14 +1354,16 @@ async function acceptFriendRequest(userId, targetUserId) {
     if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'accepted', isRead: Boolean(request.isRead) };
+    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
+    return { ...rest, status: 'accepted', isRead: Boolean(request.isRead) };
   });
 
   const nextRecipientRequests = recipientRequests.map((request) => {
     if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'accepted', isRead: Boolean(request.isRead) };
+    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
+    return { ...rest, status: 'accepted', isRead: Boolean(request.isRead) };
   });
 
   const senderFriends = Array.isArray(sender.friends) ? sender.friends : [];
@@ -1405,13 +1403,15 @@ async function denyFriendRequest(userId, targetUserId) {
     if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'rejected', isRead: Boolean(request.isRead) };
+    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
+    return { ...rest, status: 'rejected', isRead: Boolean(request.isRead) };
   });
   const nextRecipientRequests = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).map((request) => {
     if (String(request.requestId || '') !== requestId) {
       return request;
     }
-    return { ...request, status: 'rejected', isRead: Boolean(request.isRead) };
+    const { senderId: _senderId, receiverId: _receiverId, ...rest } = request;
+    return { ...rest, status: 'rejected', isRead: Boolean(request.isRead) };
   });
 
   await updateUserById(userId, { friendRequests: nextSenderRequests });

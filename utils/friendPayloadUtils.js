@@ -61,8 +61,21 @@ function normalizeFriendRequestStatus(rawStatus) {
 
 function buildFriendRequestPayload(request = {}) {
   const requestId = normalizeIdValue(request.requestId || request.id || '');
-  const senderId = normalizeIdValue(request.senderId || request.userId || request.fromUserId || '');
-  const receiverId = normalizeIdValue(request.receiverId || request.recipientId || request.targetUserId || request.toUserId || '');
+  const senderId = normalizeIdValue(
+    request.senderId ||
+      request.userId ||
+      request.fromUserId ||
+      (request.sender && (request.sender.userId || request.sender.id)) ||
+      '',
+  );
+  const receiverId = normalizeIdValue(
+    request.receiverId ||
+      request.recipientId ||
+      request.targetUserId ||
+      request.toUserId ||
+      (request.receiver && (request.receiver.userId || request.receiver.id)) ||
+      '',
+  );
   const targetUserId = receiverId || normalizeIdValue(request.targetUserId || '');
   const senderProfile = request.sender && typeof request.sender === 'object' ? request.sender : null;
   const receiverProfile = request.receiver && typeof request.receiver === 'object'
@@ -74,8 +87,6 @@ function buildFriendRequestPayload(request = {}) {
     requestId,
     status: normalizeFriendRequestStatus(request.status),
     createdAt: request.createdAt || request.timestamp || null,
-    senderId,
-    receiverId,
     requestType: request.requestType || 'FRIEND_REQUEST_OUTGOING',
     isRead: Boolean(request.isRead),
     isIncoming: Boolean(request.isIncoming),

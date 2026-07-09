@@ -1844,19 +1844,20 @@ app.get('/user/:userId', async (req, res) => {
 
 // ========== FRIEND REQUEST & FRIEND LIST ENDPOINTS ==========
 
-// Frontend compatibility alias: POST /friends/add (maps friendId → targetUserId)
+// Frontend compatibility alias: POST /friends/add (accepts friendId or recipientId)
 app.post('/friends/add', asyncHandler(async (req, res) => {
   if (!await isDatabaseConnected()) {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
-  const { userId, friendId } = req.body;
-  if (!userId || !friendId) {
-    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  const { userId, friendId, recipientId } = req.body;
+  const targetUserId = normalizeId(friendId || recipientId);
+  if (!userId || !targetUserId) {
+    return sendError(res, 400, 'userId and recipientId are required', 'VALIDATION_ERROR');
   }
 
   // Validate not self-request
-  if (userId === friendId) {
+  if (userId === targetUserId) {
     return sendError(res, 400, 'Cannot send friend request to yourself', 'INVALID_REQUEST');
   }
 
@@ -1868,34 +1869,34 @@ app.post('/friends/add', asyncHandler(async (req, res) => {
 
     // Check if already friends
     const existingFriends = await listFriends(userId);
-    if (existingFriends.includes(String(friendId))) {
+    if (existingFriends.includes(String(targetUserId))) {
       return sendError(res, 409, 'Already friends with this user', 'ALREADY_FRIENDS');
     }
 
     // Check if request already pending
-    const existing = await getFriendRequest(userId, friendId);
+    const existing = await getFriendRequest(userId, targetUserId);
     if (existing && existing.status === 'pending') {
       return sendError(res, 409, 'Friend request already pending', 'REQUEST_PENDING');
     }
 
     // Get user profiles
     const senderUser = await getCachedUserProfile(userId);
-    const recipientUser = await getCachedUserProfile(friendId);
+    const recipientUser = await getCachedUserProfile(targetUserId);
 
     if (!senderUser || !recipientUser) {
       return sendError(res, 404, 'User not found', 'USER_NOT_FOUND');
     }
 
     // Create request
-    const request = await createFriendRequest(userId, friendId, {
+    const request = await createFriendRequest(userId, targetUserId, {
       senderProfile: { userId: senderUser.userId, userName: senderUser.userName },
       recipientProfile: { userId: recipientUser.userId, userName: recipientUser.userName },
     });
 
-    Logger.info('friends/add', '✅ Friend request created', { from: userId, to: friendId });
+    Logger.info('friends/add', '✅ Friend request created', { from: userId, to: targetUserId });
 
     // 📱 Emit real-time notification to recipient
-    notifyUserOfFriendEvent(friendId, 'friend_request_received', {
+    notifyUserOfFriendEvent(targetUserId, 'friend_request_received', {
       request: buildFriendRequestPayload({
         ...request,
         sender: buildFriendCompleteUserProfile(senderUser),
@@ -2115,8 +2116,6 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
         ...request,
         requestId: `${userId}|${targetUserId}`,
         status: finalStatus,
-        senderId: userId,
-        receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_DENIED',
         isIncoming: false,
         sender: buildFriendCompleteUserProfile(updatedSenderUser),
@@ -2132,8 +2131,6 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
         ...request,
         requestId: `${userId}|${targetUserId}`,
         status: finalStatus,
-        senderId: userId,
-        receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_DENIED',
         isIncoming: false,
         isOutgoing: false,
@@ -2171,8 +2168,6 @@ app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
       request: buildFriendRequestPayload({
         requestId: `${userId}|${targetUserId}`,
         status: 'cancelled',
-        senderId: userId,
-        receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_CANCELLED',
         isIncoming: false,
         sender: buildFriendCompleteUserProfile(await getUserById(userId)),
@@ -2187,8 +2182,6 @@ app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
       request: buildFriendRequestPayload({
         requestId: `${userId}|${targetUserId}`,
         status: 'cancelled',
-        senderId: userId,
-        receiverId: targetUserId,
         requestType: 'FRIEND_REQUEST_CANCELLED',
         isIncoming: false,
         isOutgoing: false,
@@ -2206,29 +2199,33 @@ app.post('/friends/remove', asyncHandler(async (req, res) => {
     return sendError(res, 503, 'Database not connected', 'DB_NOT_CONNECTED');
   }
 
-  const { userId, friendId } = req.body;
-  if (!userId || !friendId) {
-    return sendError(res, 400, 'userId and friendId are required', 'VALIDATION_ERROR');
+  const { userId, friendId, recipientId } = req.body;
+  const targetUserId = normalizeId(friendId || recipientId);
+  if (!userId || !targetUserId) {
+    return sendError(res, 400, 'userId and friendId/recipientId are required', 'VALIDATION_ERROR');
   }
 
   try {
-    await removeFriend(userId, friendId);
+    const removed = await removeFriend(userId, targetUserId);
+    if (!removed) {
+      return sendError(res, 404, 'Unable to remove friend. User or friend not found.', 'NOT_FOUND');
+    }
 
     // 🗑️ Clear caches for both users
     clearUserProfileCache(userId);
-    clearUserProfileCache(friendId);
+    clearUserProfileCache(targetUserId);
 
-    Logger.info('friends/remove', '✅ Friend removed', { user: userId, removed: friendId });
+    Logger.info('friends/remove', '✅ Friend removed', { user: userId, removed: targetUserId });
 
     // 📱 Emit real-time notification to removed friend
-    notifyUserOfFriendEvent(friendId, 'friend_removed', {
+    notifyUserOfFriendEvent(targetUserId, 'friend_removed', {
       currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
-      friend: buildFriendCompleteUserProfile(await getUserById(friendId)),
-      removedFriendId: friendId,
+      friend: buildFriendCompleteUserProfile(await getUserById(targetUserId)),
+      removedFriendId: targetUserId,
     });
 
     const updatedUser = await getUserById(userId);
-    const updatedTarget = await getUserById(friendId);
+    const updatedTarget = await getUserById(targetUserId);
     return sendSuccess(res, {
       currentUser: buildFriendCompleteUserProfile(updatedUser),
       friend: buildFriendCompleteUserProfile(updatedTarget),
