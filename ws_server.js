@@ -2065,9 +2065,37 @@ app.post('/friends/request/accept', asyncHandler(async (req, res) => {
 
   try {
     // Parse requestId format: "userId|targetUserId"
-    const [userId, targetUserId] = requestId.split('|');
-    if (!userId || !targetUserId) {
-      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
+    const currentUserId = req.body.userId?.toString().trim();
+    const fromUserId = req.body.fromUserId?.toString().trim();
+    if (!currentUserId) {
+      return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+    }
+
+    let userId = '';
+    let targetUserId = '';
+    const shouldUseFromUserId = fromUserId !== '' && fromUserId !== currentUserId;
+
+    if (shouldUseFromUserId) {
+      userId = fromUserId;
+      targetUserId = currentUserId;
+    } else if (requestId.includes('|')) {
+      const parts = requestId
+          .split('|')
+          .map((part) => part.toString().trim())
+          .filter((part) => part !== '');
+      if (parts.length === 2) {
+        userId = parts[0];
+        targetUserId = parts[1];
+      }
+    }
+
+    if (userId === '' || targetUserId === '') {
+      const resolved = await resolveFriendRequestParticipants(requestId, currentUserId);
+      if (!resolved) {
+        return sendError(res, 400, 'Unable to resolve friend request participants', 'INVALID_REQUEST');
+      }
+      userId = resolved.senderId;
+      targetUserId = resolved.receiverId;
     }
 
     // 🔒 Check rate limit
@@ -2141,9 +2169,37 @@ app.post('/friends/request/deny', asyncHandler(async (req, res) => {
   }
 
   try {
-    const [userId, targetUserId] = requestId.split('|');
-    if (!userId || !targetUserId) {
-      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
+    const currentUserId = req.body.userId?.toString().trim();
+    const fromUserId = req.body.fromUserId?.toString().trim();
+    if (!currentUserId) {
+      return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+    }
+
+    let userId = '';
+    let targetUserId = '';
+    const shouldUseFromUserId = fromUserId !== '' && fromUserId !== currentUserId;
+
+    if (shouldUseFromUserId) {
+      userId = fromUserId;
+      targetUserId = currentUserId;
+    } else if (requestId.includes('|')) {
+      const parts = requestId
+          .split('|')
+          .map((part) => part.toString().trim())
+          .filter((part) => part !== '');
+      if (parts.length === 2) {
+        userId = parts[0];
+        targetUserId = parts[1];
+      }
+    }
+
+    if (userId === '' || targetUserId === '') {
+      const resolved = await resolveFriendRequestParticipants(requestId, currentUserId);
+      if (!resolved) {
+        return sendError(res, 400, 'Unable to resolve friend request participants', 'INVALID_REQUEST');
+      }
+      userId = resolved.senderId;
+      targetUserId = resolved.receiverId;
     }
 
     const request = await getFriendRequest(userId, targetUserId);
@@ -2206,9 +2262,37 @@ app.post('/friends/request/cancel', asyncHandler(async (req, res) => {
   }
 
   try {
-    const [userId, targetUserId] = requestId.split('|');
-    if (!userId || !targetUserId) {
-      return sendError(res, 400, 'Invalid requestId format', 'INVALID_REQUEST');
+    const currentUserId = req.body.userId?.toString().trim();
+    const fromUserId = req.body.fromUserId?.toString().trim();
+    if (!currentUserId) {
+      return sendError(res, 400, 'userId is required', 'VALIDATION_ERROR');
+    }
+
+    let userId = '';
+    let targetUserId = '';
+    const shouldUseFromUserId = fromUserId !== '' && fromUserId !== currentUserId;
+
+    if (shouldUseFromUserId) {
+      userId = fromUserId;
+      targetUserId = currentUserId;
+    } else if (requestId.includes('|')) {
+      const parts = requestId
+          .split('|')
+          .map((part) => part.toString().trim())
+          .filter((part) => part !== '');
+      if (parts.length === 2) {
+        userId = parts[0];
+        targetUserId = parts[1];
+      }
+    }
+
+    if (userId === '' || targetUserId === '') {
+      const resolved = await resolveFriendRequestParticipants(requestId, currentUserId);
+      if (!resolved) {
+        return sendError(res, 400, 'Unable to resolve friend request participants', 'INVALID_REQUEST');
+      }
+      userId = resolved.senderId;
+      targetUserId = resolved.receiverId;
     }
 
     await denyFriendRequest(userId, targetUserId);
@@ -3111,6 +3195,71 @@ async function getCachedUserProfile(userId) {
 // Helper: Clear user profile cache
 function clearUserProfileCache(userId) {
   userProfileCache.delete(userId);
+}
+
+async function resolveFriendRequestParticipants(requestId, currentUserId) {
+  if (!requestId || !currentUserId) return null;
+  const normalizedRequestId = String(requestId).trim();
+  const normalizedCurrentUserId = String(currentUserId).trim();
+  if (!normalizedRequestId || !normalizedCurrentUserId) return null;
+
+  if (normalizedRequestId.includes('|')) {
+    const parts = normalizedRequestId
+        .split('|')
+        .map((part) => part.toString().trim())
+        .filter((part) => part !== '');
+    if (parts.length === 2) {
+      return {
+        senderId: parts[0],
+        receiverId: parts[1],
+      };
+    }
+  }
+
+  const currentUser = await getUserById(normalizedCurrentUserId);
+  if (!currentUser || !Array.isArray(currentUser.friendRequests)) return null;
+
+  const request = currentUser.friendRequests.find((item) => {
+    const candidate = String(item.requestId || item.id || item._id || '').trim();
+    return candidate === normalizedRequestId;
+  });
+  if (!request) return null;
+
+  const senderId = String(
+    request?.sender?.userId || request?.sender?.id || request?.fromUserId || request?.userId || ''
+  ).trim();
+  const receiverId = String(
+    request?.receiver?.userId || request?.receiver?.id || request?.receiver?.recipientId || request?.receiver?.targetUserId || request?.receiver?.toUserId || request?.recipientId || request?.receiverId || request?.targetUserId || request?.toUserId || ''
+  ).trim();
+
+  const requestType = String(request?.requestType || '').toUpperCase();
+  const isIncoming = requestType.includes('INCOMING') || request?.isIncoming === true;
+  const isOutgoing = requestType.includes('OUTGOING') || request?.isOutgoing === true;
+
+  if (senderId && receiverId) {
+    return { senderId, receiverId };
+  }
+  if (isIncoming) {
+    return {
+      senderId: senderId !== '' ? senderId : normalizedCurrentUserId,
+      receiverId: normalizedCurrentUserId,
+    };
+  }
+  if (isOutgoing) {
+    return {
+      senderId: normalizedCurrentUserId,
+      receiverId: receiverId !== '' ? receiverId : normalizedCurrentUserId,
+    };
+  }
+
+  if (senderId && !receiverId) {
+    return { senderId, receiverId: normalizedCurrentUserId };
+  }
+  if (receiverId && !senderId) {
+    return { senderId: normalizedCurrentUserId, receiverId };
+  }
+
+  return null;
 }
 
 // Helper: Emit real-time friend event to user if they're online

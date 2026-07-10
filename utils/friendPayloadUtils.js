@@ -96,9 +96,7 @@ function buildFriendRequestPayload(request = {}) {
     requestId,
     status: normalizeFriendRequestStatus(request.status),
     createdAt: request.createdAt || request.timestamp || null,
-    requestType: inferredRequestType.isNotEmpty
-      ? inferredRequestType
-      : 'FRIEND_REQUEST_OUTGOING',
+    requestType: inferredRequestType !== '' ? inferredRequestType : 'FRIEND_REQUEST_OUTGOING',
     isRead: Boolean(request.isRead),
     isIncoming: Boolean(request.isIncoming),
     sender: senderProfile
