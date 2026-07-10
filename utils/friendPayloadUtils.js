@@ -85,11 +85,20 @@ function buildFriendRequestPayload(request = {}) {
     : (request.to && typeof request.to === 'object' ? request.to : null);
   const senderProfileImageUrl = resolveProfileImageReference(senderProfile);
   const receiverProfileImageUrl = resolveProfileImageReference(receiverProfile);
+  const explicitRequestType = normalizeIdValue(
+    request.requestType || request.RequestType || request.type || '',
+  );
+  const inferredRequestType = explicitRequestType ||
+      (request.isIncoming === true ? 'FRIEND_REQUEST_INCOMING' : '') ||
+      (request.isOutgoing === true ? 'FRIEND_REQUEST_OUTGOING' : '');
+
   const normalized = {
     requestId,
     status: normalizeFriendRequestStatus(request.status),
     createdAt: request.createdAt || request.timestamp || null,
-    requestType: request.requestType || 'FRIEND_REQUEST_OUTGOING',
+    requestType: inferredRequestType.isNotEmpty
+      ? inferredRequestType
+      : 'FRIEND_REQUEST_OUTGOING',
     isRead: Boolean(request.isRead),
     isIncoming: Boolean(request.isIncoming),
     sender: senderProfile

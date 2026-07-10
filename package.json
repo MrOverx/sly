@@ -1,6 +1,6 @@
 {
   "name": "slyxyserver",
-  "version": "2.67.0",
+  "version": "2.68.0",
   "main": "ws_server.js",
   "scripts": {
     "start": "node ws_server.js",
