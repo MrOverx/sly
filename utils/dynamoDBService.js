@@ -38,6 +38,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
 }
 const { Logger } = require('./logger');
 const { resolveProfileImageReference, normalizeProfileImageReference } = require('./friendPayloadUtils');
+const crypto = require('crypto');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
 const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
@@ -360,30 +361,30 @@ function buildUserItem(user) {
           : (request.to && typeof request.to === 'object' ? request.to : null);
         const senderProfileImageUrl = resolveProfileImageReference(sender);
         const receiverProfileImageUrl = resolveProfileImageReference(receiver);
+        const baseRequestId = request.requestId || request.id;
+        const computedRequestId = baseRequestId || `req_${(request.createdAt ? new Date(request.createdAt).getTime() : Date.now())}_${crypto.randomBytes(6).toString('hex')}`;
         return {
           ...request,
-          requestId: request.requestId || request.id || `${senderId}|${receiverId}`,
+          requestId: computedRequestId,
           status: request.status || 'pending',
           senderId,
           receiverId,
           sender: sender
             ? {
-                ...sender,
                 userId: sender.userId || sender.id || senderId || null,
                 id: sender.id || sender.userId || senderId || null,
-                profileImageUrl: senderProfileImageUrl,
-                profile_image_url: senderProfileImageUrl,
+                userName: sender.userName || sender.user_name || sender.displayName || sender.name || '',
+                profileImageUrl: senderProfileImageUrl || null,
               }
-            : (senderId ? { userId: senderId, id: senderId, profileImageUrl: null, profile_image_url: null } : null),
+            : (senderId ? { userId: senderId, id: senderId, profileImageUrl: null } : null),
           receiver: receiver
             ? {
-                ...receiver,
                 userId: receiver.userId || receiver.id || receiverId || null,
                 id: receiver.id || receiver.userId || receiverId || null,
-                profileImageUrl: receiverProfileImageUrl,
-                profile_image_url: receiverProfileImageUrl,
+                userName: receiver.userName || receiver.user_name || receiver.displayName || receiver.name || '',
+                profileImageUrl: receiverProfileImageUrl || null,
               }
-            : (receiverId ? { userId: receiverId, id: receiverId, profileImageUrl: null, profile_image_url: null } : null),
+            : (receiverId ? { userId: receiverId, id: receiverId, profileImageUrl: null } : null),
         };
       })
     : [];
@@ -1252,17 +1253,22 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
   if (!userId || !targetUserId || userId === targetUserId) return null;
   if (!USE_DEV_STORE) await loadTableSchema();
 
-  const requestId = `${normalizeIdValue(userId)}|${normalizeIdValue(targetUserId)}`;
+  const baseRequestId = normalizeIdValue(metadata.requestId || metadata.id || '');
+  const requestId = baseRequestId || `req_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
   const now = new Date().toISOString();
+  const rawSender = metadata.senderProfile || { userId, userName: metadata.userName || userId };
   const senderProfile = {
-    ...(metadata.senderProfile || { userId, userName: metadata.userName || userId }),
-    profileImageUrl: normalizeProfileImageReference((metadata.senderProfile || {}).profileImageUrl || (metadata.senderProfile || {}).profile_image_url || (metadata.senderProfile || {}).avatarUrl || (metadata.senderProfile || {}).avatar_url || null),
-    profile_image_url: normalizeProfileImageReference((metadata.senderProfile || {}).profileImageUrl || (metadata.senderProfile || {}).profile_image_url || (metadata.senderProfile || {}).avatarUrl || (metadata.senderProfile || {}).avatar_url || null),
+    userId: rawSender.userId || rawSender.id || userId,
+    id: rawSender.id || rawSender.userId || userId,
+    userName: rawSender.userName || rawSender.user_name || rawSender.displayName || rawSender.name || metadata.userName || '',
+    profileImageUrl: normalizeProfileImageReference(rawSender.profileImageUrl || rawSender.profile_image_url || rawSender.avatarUrl || rawSender.avatar_url || null),
   };
+  const rawRecipient = metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId };
   const recipientProfile = {
-    ...(metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId }),
-    profileImageUrl: normalizeProfileImageReference((metadata.recipientProfile || {}).profileImageUrl || (metadata.recipientProfile || {}).profile_image_url || (metadata.recipientProfile || {}).avatarUrl || (metadata.recipientProfile || {}).avatar_url || null),
-    profile_image_url: normalizeProfileImageReference((metadata.recipientProfile || {}).profileImageUrl || (metadata.recipientProfile || {}).profile_image_url || (metadata.recipientProfile || {}).avatarUrl || (metadata.recipientProfile || {}).avatar_url || null),
+    userId: rawRecipient.userId || rawRecipient.id || targetUserId,
+    id: rawRecipient.id || rawRecipient.userId || targetUserId,
+    userName: rawRecipient.userName || rawRecipient.user_name || rawRecipient.displayName || rawRecipient.name || metadata.recipientUserName || '',
+    profileImageUrl: normalizeProfileImageReference(rawRecipient.profileImageUrl || rawRecipient.profile_image_url || rawRecipient.avatarUrl || rawRecipient.avatar_url || null),
   };
 
   const outgoingRequest = {

@@ -7,6 +7,8 @@ function normalizeIdValue(value) {
   }
 }
 
+const crypto = require('crypto');
+
 function normalizeProfileImageReference(value) {
   if (value === undefined || value === null) return null;
   if (typeof value === 'string') {
@@ -112,8 +114,12 @@ function buildFriendRequestPayload(request = {}) {
       : (receiverId ? { userId: receiverId, id: receiverId, userName: '', profileImageUrl: null } : null),
   };
 
-  if (!normalized.requestId && senderId && targetUserId) {
-    normalized.requestId = `${senderId}|${targetUserId}`;
+  // Avoid composing requestId from sender|receiver (privacy/ambiguity).
+  // Prefer any provided requestId; if missing, generate a stable, opaque id.
+  if (!normalized.requestId) {
+    const ts = normalized.createdAt ? new Date(normalized.createdAt).getTime() : Date.now();
+    const rand = crypto.randomBytes(6).toString('hex');
+    normalized.requestId = `req_${ts}_${rand}`;
   }
 
   return normalized;
