@@ -91,23 +91,25 @@ function buildFriendRequestPayload(request = {}) {
     isRead: Boolean(request.isRead),
     isIncoming: Boolean(request.isIncoming),
     sender: senderProfile
-      ? {
-          ...senderProfile,
-          userId: senderProfile.userId || senderProfile.id || senderId || null,
-          id: senderProfile.id || senderProfile.userId || senderId || null,
-          profileImageUrl: senderProfileImageUrl,
-          profile_image_url: senderProfileImageUrl,
-        }
-      : (senderId ? { userId: senderId, id: senderId, profileImageUrl: null, profile_image_url: null } : null),
+      ? (function () {
+          const sp = { ...senderProfile };
+          sp.userId = sp.userId || sp.id || senderId || null;
+          sp.id = sp.id || sp.userId || senderId || null;
+          sp.userName = sp.userName || sp.user_name || sp.displayName || sp.name || '';
+          sp.profileImageUrl = senderProfileImageUrl || sp.profileImageUrl || sp.profile_image_url || sp.avatarUrl || sp.avatar_url || sp.profileImagePath || sp.profile_image_path || null;
+          return sp;
+        })()
+      : (senderId ? { userId: senderId, id: senderId, userName: '', profileImageUrl: null } : null),
     receiver: receiverProfile
-      ? {
-          ...receiverProfile,
-          userId: receiverProfile.userId || receiverProfile.id || receiverId || null,
-          id: receiverProfile.id || receiverProfile.userId || receiverId || null,
-          profileImageUrl: receiverProfileImageUrl,
-          profile_image_url: receiverProfileImageUrl,
-        }
-      : (receiverId ? { userId: receiverId, id: receiverId, profileImageUrl: null, profile_image_url: null } : null),
+      ? (function () {
+          const rp = { ...receiverProfile };
+          rp.userId = rp.userId || rp.id || receiverId || null;
+          rp.id = rp.id || rp.userId || receiverId || null;
+          rp.userName = rp.userName || rp.user_name || rp.displayName || rp.name || '';
+          rp.profileImageUrl = receiverProfileImageUrl || rp.profileImageUrl || rp.profile_image_url || rp.avatarUrl || rp.avatar_url || rp.profileImagePath || rp.profile_image_path || null;
+          return rp;
+        })()
+      : (receiverId ? { userId: receiverId, id: receiverId, userName: '', profileImageUrl: null } : null),
   };
 
   if (!normalized.requestId && senderId && targetUserId) {
