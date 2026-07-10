@@ -1278,6 +1278,8 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
     requestType: 'FRIEND_REQUEST_OUTGOING',
     isRead: false,
     isIncoming: false,
+    senderId: senderProfile.userId,
+    receiverId: recipientProfile.userId,
     sender: senderProfile,
     receiver: recipientProfile,
   };
@@ -1311,23 +1313,47 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
 async function getFriendRequest(userId, targetUserId) {
   if (!userId || !targetUserId) return null;
 
+  const normalizeId = (value) => String(value || '').trim();
+  const expectedSender = normalizeId(userId);
+  const expectedReceiver = normalizeId(targetUserId);
+  const expectedRequestId = `${expectedSender}|${expectedReceiver}`;
+
+  const matchesRequest = (item) => {
+    if (!item || typeof item !== 'object') return false;
+
+    const candidateRequestId = normalizeId(item.requestId || item.id || item._id || '');
+    if (candidateRequestId && candidateRequestId === expectedRequestId) return true;
+
+    const senderId = normalizeId(
+      item.senderId ||
+      item.userId ||
+      item.fromUserId ||
+      item.sender?.userId ||
+      item.sender?.id ||
+      '',
+    );
+    const receiverId = normalizeId(
+      item.receiverId ||
+      item.recipientId ||
+      item.targetUserId ||
+      item.toUserId ||
+      item.receiver?.userId ||
+      item.receiver?.id ||
+      '',
+    );
+
+    return senderId === expectedSender && receiverId === expectedReceiver;
+  };
+
   const recipient = await getUserById(targetUserId);
   if (recipient) {
-    const request = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).find((item) => {
-      const sameRequest = String(item.requestId || '') === `${String(userId)}|${String(targetUserId)}`;
-      const sameIds = String(item.senderId || item.userId || '') === String(userId) && String(item.receiverId || item.recipientId || item.targetUserId || '') === String(targetUserId);
-      return sameRequest || sameIds;
-    });
+    const request = (Array.isArray(recipient.friendRequests) ? recipient.friendRequests : []).find(matchesRequest);
     if (request) return request;
   }
 
   const sender = await getUserById(userId);
   if (!sender) return null;
-  return (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).find((item) => {
-    const sameRequest = String(item.requestId || '') === `${String(userId)}|${String(targetUserId)}`;
-    const sameIds = String(item.senderId || item.userId || '') === String(userId) && String(item.receiverId || item.recipientId || item.targetUserId || '') === String(targetUserId);
-    return sameRequest || sameIds;
-  }) || null;
+  return (Array.isArray(sender.friendRequests) ? sender.friendRequests : []).find(matchesRequest) || null;
 }
 
 async function queryFriendRequestsForUser(userId, direction = 'incoming') {
