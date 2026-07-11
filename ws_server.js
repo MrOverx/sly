@@ -112,8 +112,13 @@ function normalizeIdValue(value) {
 function buildCompleteUserProfile(user) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
-  const profileImagePath = user.profileImagePath || user.profileImageUrl || null;
-  const profileImageUrl = user.profileImageUrl || user.profileImagePath || null;
+  const rawProfileImagePath = normalizeProfileImageReference(user.profileImagePath) || normalizeProfileImageReference(user.profile_image_path) || null;
+  const safeProfileImageUrl = resolveProfileImageReference(user) || null;
+  const fallbackProfileImagePath = !safeProfileImageUrl
+    ? normalizeProfileImageReference(user.profileImageUrl) || normalizeProfileImageReference(user.profile_image_url) || null
+    : null;
+  const profileImagePath = rawProfileImagePath || fallbackProfileImagePath;
+  const profileImageUrl = safeProfileImageUrl;
   const normalizedEmail = user.email ? String(user.email).trim().toLowerCase() : null;
   const emailVerified = user.emailVerified === true;
   const emailVerifiedAt = normalizeIsoTimestamp(user.emailVerifiedAt);
@@ -994,7 +999,11 @@ async function resolveUserProfileMetadata(
     ...(userMeta || {}),
   };
 
-  const hasImage = Boolean(resolveProfileImageReference(meta) || normalizeProfileImageReference(meta.profileImagePath) || normalizeProfileImageReference(meta.profileImageUrl));
+  const hasImage = Boolean(
+    resolveProfileImageReference(meta) ||
+    normalizeProfileImageReference(meta.profileImagePath) ||
+    normalizeProfileImageReference(meta.profileImageUrl),
+  );
   const hasName = Boolean(meta.userName);
   const hasLetter = Boolean(meta.avatarLetter);
   const hasColor = Boolean(meta.avatarColor);
@@ -1004,21 +1013,40 @@ async function resolveUserProfileMetadata(
       const dbUser = await getUserById(normalizedUserId);
       if (dbUser) {
         const completeProfile = buildCompleteUserProfile(dbUser) || {};
-        meta.userName = meta.userName || completeProfile.userName || completeProfile.name || fallbackName;
+        meta.userName =
+          meta.userName || completeProfile.userName || completeProfile.name || fallbackName;
         meta.avatarColor = meta.avatarColor || completeProfile.avatarColor || fallbackColor;
-        meta.avatarLetter = meta.avatarLetter || completeProfile.avatarLetter || (meta.userName ? String(meta.userName).charAt(0).toUpperCase() : fallbackLetter);
-        meta.profileImagePath = meta.profileImagePath || completeProfile.profileImagePath || completeProfile.profileImageUrl || null;
-        meta.profileImageUrl = meta.profileImageUrl || completeProfile.profileImageUrl || completeProfile.profileImagePath || null;
+        meta.avatarLetter =
+          meta.avatarLetter ||
+          completeProfile.avatarLetter ||
+          (meta.userName ? String(meta.userName).charAt(0).toUpperCase() : fallbackLetter);
+        meta.profileImagePath =
+          meta.profileImagePath || completeProfile.profileImagePath || completeProfile.profileImageUrl || null;
+        meta.profileImageUrl =
+          meta.profileImageUrl ||
+          completeProfile.profileImageUrl ||
+          getSafeProfileImageReference(completeProfile.profileImagePath) ||
+          null;
       }
     } catch (error) {
-      Logger.warn('resolveUserProfileMetadata', 'Unable to fetch DB profile for user', { userId: normalizedUserId, error: error && error.message });
+      Logger.warn('resolveUserProfileMetadata', 'Unable to fetch DB profile for user', {
+        userId: normalizedUserId,
+        error: error && error.message,
+      });
     }
   }
 
-  const resolvedName = String(meta.userName || fallbackName || normalizedUserId || 'User').trim() || 'User';
-  const resolvedColor = String(meta.avatarColor || fallbackColor || '#128C7E').trim() || '#128C7E';
-  const resolvedLetter = String(meta.avatarLetter || resolvedName[0] || fallbackLetter || 'U').trim().toUpperCase();
-  const resolvedImage = resolveProfileImageReference(meta) || normalizeProfileImageReference(meta.profileImagePath) || normalizeProfileImageReference(meta.profileImageUrl) || null;
+  const resolvedName =
+    String(meta.userName || fallbackName || normalizedUserId || 'User').trim() || 'User';
+  const resolvedColor =
+    String(meta.avatarColor || fallbackColor || '#128C7E').trim() || '#128C7E';
+  const resolvedLetter =
+    String(meta.avatarLetter || resolvedName[0] || fallbackLetter || 'U').trim().toUpperCase();
+  const resolvedImage =
+    resolveProfileImageReference(meta) ||
+    getSafeProfileImageReference(meta.profileImageUrl) ||
+    getSafeProfileImageReference(meta.profileImagePath) ||
+    null;
 
   return {
     userId: normalizedUserId,
@@ -1032,7 +1060,7 @@ async function resolveUserProfileMetadata(
 
 function buildParticipant(userId, meta, role) {
   const safeImageUrl =
-    meta.profileImageUrl || getSafeProfileImageReference(meta.profileImagePath) || null;
+    getSafeProfileImageReference(meta.profileImageUrl) || getSafeProfileImageReference(meta.profileImagePath) || null;
   return {
     userId,
     userName: meta.userName,
@@ -1938,8 +1966,16 @@ app.post('/friends/add', asyncHandler(async (req, res) => {
 
     // Create request
     const request = await createFriendRequest(userId, targetUserId, {
-      senderProfile: { userId: senderUser.userId, userName: senderUser.userName },
-      recipientProfile: { userId: recipientUser.userId, userName: recipientUser.userName },
+      senderProfile: {
+        userId: senderUser.userId,
+        userName: senderUser.userName,
+        profileImageUrl: senderUser.profileImageUrl,
+      },
+      recipientProfile: {
+        userId: recipientUser.userId,
+        userName: recipientUser.userName,
+        profileImageUrl: recipientUser.profileImageUrl,
+      },
     });
 
     Logger.info('friends/add', '✅ Friend request created', { from: userId, to: targetUserId });
@@ -2016,8 +2052,16 @@ app.post('/friends/request/send', asyncHandler(async (req, res) => {
     }
 
     const request = await createFriendRequest(userId, targetUserId, {
-      senderProfile: { userId: senderUser.userId, userName: senderUser.userName },
-      recipientProfile: { userId: recipientUser.userId, userName: recipientUser.userName },
+      senderProfile: {
+        userId: senderUser.userId,
+        userName: senderUser.userName,
+        profileImageUrl: senderUser.profileImageUrl,
+      },
+      recipientProfile: {
+        userId: recipientUser.userId,
+        userName: recipientUser.userName,
+        profileImageUrl: recipientUser.profileImageUrl,
+      },
     });
 
     Logger.info('friends/request/send', '✅ Friend request created', { from: userId, to: targetUserId });

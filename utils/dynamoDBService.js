@@ -222,20 +222,20 @@ function normalizeAuthType(value) {
 function buildProfileImageFields(user) {
   const profileImageUrl = normalizeProfileImageReference(user.profileImageUrl);
   const profileImagePath = normalizeProfileImageReference(user.profileImagePath);
-  const imageUrl = profileImageUrl || profileImagePath || null;
-  const imagePath = profileImagePath || profileImageUrl || null;
+  const safeProfileImageUrl = resolveProfileImageReference({ profileImageUrl, profileImagePath });
+  const safeProfileImagePath = profileImagePath || safeProfileImageUrl || null;
 
   const baseFields = {
-    profileImageUrl: imageUrl,
-    profileImagePath: imagePath,
-    profile_image_url: imageUrl,
-    profile_image_path: imagePath,
-    avatarUrl: imageUrl,
-    avatar_url: imageUrl,
-    displayImageUrl: imageUrl,
-    display_image_url: imageUrl,
-    displayImagePath: imagePath,
-    display_image_path: imagePath,
+    profileImageUrl: safeProfileImageUrl,
+    profileImagePath: safeProfileImagePath,
+    profile_image_url: safeProfileImageUrl,
+    profile_image_path: safeProfileImagePath,
+    avatarUrl: safeProfileImageUrl,
+    avatar_url: safeProfileImageUrl,
+    displayImageUrl: safeProfileImageUrl,
+    display_image_url: safeProfileImageUrl,
+    displayImagePath: safeProfileImagePath,
+    display_image_path: safeProfileImagePath,
   };
 
   if (profileImageUrl && profileImagePath && profileImageUrl === profileImagePath) {
@@ -1261,14 +1261,14 @@ async function createFriendRequest(userId, targetUserId, metadata = {}) {
     userId: rawSender.userId || rawSender.id || userId,
     id: rawSender.id || rawSender.userId || userId,
     userName: rawSender.userName || rawSender.user_name || rawSender.displayName || rawSender.name || metadata.userName || '',
-    profileImageUrl: normalizeProfileImageReference(rawSender.profileImageUrl || rawSender.profile_image_url || rawSender.avatarUrl || rawSender.avatar_url || null),
+    profileImageUrl: normalizeProfileImageReference(resolveProfileImageReference(rawSender)),
   };
   const rawRecipient = metadata.recipientProfile || { userId: targetUserId, userName: metadata.recipientUserName || targetUserId };
   const recipientProfile = {
     userId: rawRecipient.userId || rawRecipient.id || targetUserId,
     id: rawRecipient.id || rawRecipient.userId || targetUserId,
     userName: rawRecipient.userName || rawRecipient.user_name || rawRecipient.displayName || rawRecipient.name || metadata.recipientUserName || '',
-    profileImageUrl: normalizeProfileImageReference(rawRecipient.profileImageUrl || rawRecipient.profile_image_url || rawRecipient.avatarUrl || rawRecipient.avatar_url || null),
+    profileImageUrl: normalizeProfileImageReference(resolveProfileImageReference(rawRecipient)),
   };
 
   const outgoingRequest = {

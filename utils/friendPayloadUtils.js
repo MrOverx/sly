@@ -23,6 +23,19 @@ function normalizeProfileImageReference(value) {
   return value;
 }
 
+function isSafeRemoteImageUrl(value) {
+  if (value === undefined || value === null || typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  return (
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('data:') ||
+    lower.startsWith('blob:')
+  );
+}
+
 function resolveProfileImageReference(profile) {
   if (!profile || typeof profile !== 'object') return null;
   const candidates = [
@@ -30,15 +43,15 @@ function resolveProfileImageReference(profile) {
     profile.profile_image_url,
     profile.avatarUrl,
     profile.avatar_url,
-    profile.profileImagePath,
-    profile.profile_image_path,
     profile.displayImageUrl,
     profile.display_image_url,
+    profile.profileImagePath,
+    profile.profile_image_path,
   ];
 
   for (const candidate of candidates) {
     const normalized = normalizeProfileImageReference(candidate);
-    if (normalized !== null) {
+    if (normalized !== null && isSafeRemoteImageUrl(normalized)) {
       return normalized;
     }
   }
@@ -105,7 +118,7 @@ function buildFriendRequestPayload(request = {}) {
           sp.userId = sp.userId || sp.id || senderId || null;
           sp.id = sp.id || sp.userId || senderId || null;
           sp.userName = sp.userName || sp.user_name || sp.displayName || sp.name || '';
-          sp.profileImageUrl = senderProfileImageUrl || sp.profileImageUrl || sp.profile_image_url || sp.avatarUrl || sp.avatar_url || sp.profileImagePath || sp.profile_image_path || null;
+          sp.profileImageUrl = senderProfileImageUrl || resolveProfileImageReference(sp) || null;
           return sp;
         })()
       : (senderId ? { userId: senderId, id: senderId, userName: '', profileImageUrl: null } : null),
@@ -115,7 +128,7 @@ function buildFriendRequestPayload(request = {}) {
           rp.userId = rp.userId || rp.id || receiverId || null;
           rp.id = rp.id || rp.userId || receiverId || null;
           rp.userName = rp.userName || rp.user_name || rp.displayName || rp.name || '';
-          rp.profileImageUrl = receiverProfileImageUrl || rp.profileImageUrl || rp.profile_image_url || rp.avatarUrl || rp.avatar_url || rp.profileImagePath || rp.profile_image_path || null;
+          rp.profileImageUrl = receiverProfileImageUrl || resolveProfileImageReference(rp) || null;
           return rp;
         })()
       : (receiverId ? { userId: receiverId, id: receiverId, userName: '', profileImageUrl: null } : null),
@@ -135,6 +148,13 @@ function buildFriendRequestPayload(request = {}) {
 function buildCompleteUserProfile(user) {
   if (!user) return null;
 
+  const profileImageUrl = resolveProfileImageReference(user);
+  const rawProfileImagePath = normalizeProfileImageReference(user.profileImagePath) || normalizeProfileImageReference(user.profile_image_path) || null;
+  const fallbackProfileImagePath = !profileImageUrl
+    ? normalizeProfileImageReference(user.profileImageUrl) || normalizeProfileImageReference(user.profile_image_url) || null
+    : null;
+  const profileImagePath = rawProfileImagePath || fallbackProfileImagePath;
+
   const profile = {
     itemType: 'USER',
     userId: user.userId || user.id || user._id || null,
@@ -146,16 +166,16 @@ function buildCompleteUserProfile(user) {
     email: user.email || null,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || null,
-    avatarUrl: resolveProfileImageReference(user),
-    avatar_url: resolveProfileImageReference(user),
-    profileImagePath: resolveProfileImageReference(user),
-    profile_image_path: resolveProfileImageReference(user),
-    profileImageUrl: resolveProfileImageReference(user),
-    profile_image_url: resolveProfileImageReference(user),
-    displayImagePath: resolveProfileImageReference(user),
-    display_image_path: resolveProfileImageReference(user),
-    displayImageUrl: resolveProfileImageReference(user),
-    display_image_url: resolveProfileImageReference(user),
+    avatarUrl: profileImageUrl,
+    avatar_url: profileImageUrl,
+    profileImagePath,
+    profile_image_path: profileImagePath,
+    profileImageUrl,
+    profile_image_url: profileImageUrl,
+    displayImagePath: profileImagePath,
+    display_image_path: profileImagePath,
+    displayImageUrl: profileImageUrl,
+    display_image_url: profileImageUrl,
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
     birthDate: user.birthDate || null,
