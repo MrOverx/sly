@@ -123,13 +123,17 @@ function buildCompleteUserProfile(user) {
   const emailVerified = user.emailVerified === true;
   const emailVerifiedAt = normalizeIsoTimestamp(user.emailVerifiedAt);
   const baseProfile = buildFriendCompleteUserProfile(user) || {};
+  const normalizedUserId = normalizeId(user.userId || user.id || user._id || null);
+  const rawOnlineValue = user.isOnline ?? user.online ?? user.is_online ?? user.online_status ?? user.onlineStatus;
+  const storedOnline = rawOnlineValue === true || rawOnlineValue === 'true' || rawOnlineValue === '1';
+  const isOnline = storedOnline || (global.onlineUsers && normalizedUserId ? global.onlineUsers.has(normalizedUserId) : false);
 
   return {
     ...baseProfile,
     itemType: 'USER',
-    userId: user.userId || user.id || user._id || null,
-    id: user.userId || user.id || user._id || null,
-    user_id: user.userId || user.id || user._id || null,
+    userId: normalizedUserId || null,
+    id: normalizedUserId || null,
+    user_id: normalizedUserId || null,
     userName: displayName,
     name: displayName,
     displayName: displayName,
@@ -163,7 +167,7 @@ function buildCompleteUserProfile(user) {
     authType: user.authType || 'LOCAL',
     isGuest: user.isGuest === true,
     hasProfileChanged: user.hasProfileChanged === true,
-    isOnline: user.isOnline === true,
+    isOnline,
     isFriend: user.isFriend === true,
     lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
     profileComplete: user.profileComplete === true,
@@ -4259,6 +4263,7 @@ io.on('connection', (socket) => {
           for (const fid of friendIds) {
             notifyUserOfFriendEvent(fid, 'friend_status_update', {
               userId,
+              friendId: userId,
               isOnline,
               userName: statusPayload.userName,
               timestamp: statusPayload.timestamp,
@@ -5984,6 +5989,41 @@ io.on('connection', (socket) => {
 
       // Clean metadata
       cleanupSocketUserState(userData?.userId, socket.id);
+
+      // Emit offline presence on disconnect so clients can update status reliably
+      try {
+        const disconnectedUserId = normalizeId(userData?.userId);
+        if (disconnectedUserId) {
+          if (global.onlineUsers) global.onlineUsers.delete(disconnectedUserId);
+          const offlinePayload = {
+            userId: disconnectedUserId,
+            userName: userData?.userName || null,
+            isOnline: false,
+            timestamp: new Date().toISOString(),
+          };
+          io.emit('user_online_status', offlinePayload);
+
+          (async () => {
+            try {
+              const friendsList = await listFriends(disconnectedUserId).catch(() => null) || [];
+              const friendIds = (Array.isArray(friendsList) ? friendsList : []).map(f => (f.userId || f.id || f.friendId || '').toString()).filter(Boolean);
+              for (const fid of friendIds) {
+                notifyUserOfFriendEvent(fid, 'friend_status_update', {
+                  userId: disconnectedUserId,
+                  isOnline: false,
+                  userName: offlinePayload.userName,
+                  timestamp: offlinePayload.timestamp,
+                });
+              }
+            } catch (e) {
+              Logger.warn('presence', 'Error notifying friends of disconnect presence change', { userId: disconnectedUserId, error: e && e.message });
+            }
+          })();
+        }
+      } catch (e) {
+        Logger.warn('disconnect', 'Error emitting offline presence on disconnect', { socketId: socket.id, error: e && e.message });
+      }
+
       // ✅ FIX: Remove this socket from any groupChatRooms to avoid memory leaks
       try {
         for (const [groupName, roomSet] of groupChatRooms.entries()) {
