@@ -451,70 +451,9 @@ function validateProfileUpdate(req, res, next) {
  * Validate room creation request
  * Required: roomName, roomType
  */
-function validateRoomCreate(data) {
-  if (!data || typeof data !== 'object') {
-    return { valid: false, error: 'Invalid room data' };
-  }
-
-  const { roomName, roomType } = data;
-
-  if (!roomName || typeof roomName !== 'string' || roomName.trim().length === 0) {
-    return { valid: false, error: 'Room name is required and must be non-empty' };
-  }
-
-  if (roomName.length > 100) {
-    return { valid: false, error: 'Room name exceeds 100 characters' };
-  }
-
-  if (!['public', 'private'].includes(roomType)) {
-    return { valid: false, error: 'Room type must be "public" or "private"' };
-  }
-
-  return { valid: true };
-}
-
-/**
- * Validate socket metadata
- * Required: userId, userName, avatarColor
- */
-function validateSocketMetadata(metadata) {
-  if (!metadata || typeof metadata !== 'object') {
-    return { valid: false, error: 'Invalid metadata object' };
-  }
-
-  if (!metadata.userId || typeof metadata.userId !== 'string') {
-    return { valid: false, error: 'userId is required and must be a string' };
-  }
-
-  if (!metadata.userName || typeof metadata.userName !== 'string') {
-    return { valid: false, error: 'userName is required and must be a string' };
-  }
-
-  if (metadata.userName.length > 50) {
-    return { valid: false, error: 'userName exceeds 50 characters' };
-  }
-
-  return { valid: true };
-}
-
-/**
- * Generic field length validator
- */
-function validateFieldLength(field, minLength, maxLength) {
-  if (typeof field !== 'string') {
-    return { valid: false, error: `Field must be a string` };
-  }
-
-  if (field.length < minLength) {
-    return { valid: false, error: `Field must be at least ${minLength} characters` };
-  }
-
-  if (field.length > maxLength) {
-    return { valid: false, error: `Field exceeds ${maxLength} characters` };
-  }
-
-  return { valid: true };
-}
+// Note: helper validators `validateRoomCreate`, `validateSocketMetadata`, and
+// `validateFieldLength` were removed because they were internal, unused, and
+// duplicated validation logic exists in the exported validators above.
 
 module.exports = {
   validateAuth,
