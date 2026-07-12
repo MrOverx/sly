@@ -404,6 +404,25 @@ app.post('/upload', uploadLimiter, upload.single('profileImage'), async (req, re
 
     userCache.invalidate(userId);
 
+    const uploadedPayload = buildCompleteUserProfile(updatedUser) || null;
+    try {
+      if (uploadedPayload) {
+        io.emit('profile_update', uploadedPayload);
+        io.emit('profile_updated', uploadedPayload);
+        io.emit('friend_profile_updated', {
+          userId: uploadedPayload.userId,
+          id: uploadedPayload.userId,
+          profile: uploadedPayload,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (broadcastErr) {
+      Logger.warn('upload', 'Failed to broadcast profile update after image upload', {
+        userId,
+        error: broadcastErr?.message || broadcastErr,
+      });
+    }
+
     Logger.info('upload', 'Profile image uploaded and persisted to DynamoDB', {
       userId,
       key: uploaded.key,
@@ -415,8 +434,8 @@ app.post('/upload', uploadLimiter, upload.single('profileImage'), async (req, re
       data: {
         url: uploaded.url,
         key: uploaded.key,
-        profileImageUrl: updatedUser?.profileImageUrl || uploaded.url,
-        user: buildCompleteUserProfile(updatedUser) || null,
+        profileImageUrl: uploadedPayload?.profileImageUrl || updatedUser?.profileImageUrl || uploaded.url,
+        user: uploadedPayload,
       },
     }, 'Image uploaded successfully');
   } catch (err) {
@@ -2440,11 +2459,19 @@ app.get('/friends/list', asyncHandler(async (req, res) => {
   try {
     const friendIds = await listFriends(userId);
     const friends = await getUsersByIds(friendIds);
+    const userRecords = friends.map((friend) => {
+      const profile = buildCompleteUserProfile(friend);
+      return {
+        ...profile,
+        friendId: profile.userId,
+        id: profile.userId,
+      };
+    });
 
     return sendSuccess(res, {
-      friends: friends.map((f) => buildFriendCompleteUserProfile(f)),
-      count: friends.length,
-      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      friends: userRecords,
+      count: userRecords.length,
+      currentUser: buildCompleteUserProfile(await getUserById(userId)),
     }, 'Friends list retrieved');
   } catch (err) {
     Logger.error('friends/list', 'Error retrieving friends list', err.message);
