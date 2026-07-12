@@ -141,6 +141,16 @@ function saveDevStore(items) {
     return false;
   }
 }
+
+function clearDevStore() {
+  try {
+    fs.writeFileSync(DEV_STORE_PATH, JSON.stringify([], null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    console.warn('[dynamoDBService] Unable to clear dev store:', err && err.message);
+    return false;
+  }
+}
 const ddb = (DynamoDBDocumentClient && client)
   ? DynamoDBDocumentClient.from(client, {
       marshallOptions: {
@@ -445,41 +455,8 @@ function buildUserItem(user) {
   return item;
 }
 
-function buildUserSnapshot(user) {
-  if (!user || !user.userId) return null;
-
-  return {
-    userId: String(user.userId),
-    userName: user.userName || user.name || user.displayName || String(user.userId),
-    email: user.email || null,
-    avatarColor: user.avatarColor || '#128C7E',
-    avatarLetter: user.avatarLetter || (user.userName ? String(user.userName).charAt(0).toUpperCase() : 'U'),
-    profileImageUrl: user.profileImageUrl || null,
-    profileImagePath: user.profileImagePath || null,
-    gender: user.gender || 'other',
-    birthDate: toIso(user.birthDate) || null,
-    country: user.country || null,
-    status: user.status || null,
-    bio: user.bio || null,
-    interests: Array.isArray(user.interests) ? user.interests : [],
-    xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
-    authType: user.authType || null,
-    isGuest: Boolean(user.isGuest),
-    hasProfileChanged: Boolean(user.hasProfileChanged),
-    isOnline: Boolean(user.isOnline),
-    lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
-  };
-}
-
-function normalizeIsoTimestamp(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string' || typeof value === 'number') {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-  }
-  return null;
-}
+// The `normalizeIsoTimestamp` helper was removed because duplicate
+// normalization logic exists elsewhere and the function was unused.
 
 function normalizeIdValue(value) {
   if (value === undefined || value === null) return '';
@@ -998,7 +975,13 @@ async function deleteUserById(userId) {
   if (USE_DEV_STORE) {
     const items = loadDevStore();
     const key = buildItemKey(USER_PREFIX, userId);
-    const filtered = items.filter((it) => !(it.PK === key));
+    const filtered = items.filter((it) => {
+      if (!it || !it.PK) return true;
+      if (TABLE_HAS_SORT_KEY && key[TABLE_RANGE_KEY]) {
+        return !(String(it.PK) === String(key[TABLE_HASH_KEY]) && String(it.SK) === String(key[TABLE_RANGE_KEY]));
+      }
+      return String(it.PK) !== String(key[TABLE_HASH_KEY]);
+    });
     saveDevStore(filtered);
     return true;
   }
@@ -1516,5 +1499,6 @@ module.exports = {
   denyFriendRequest,
   removeFriend,
   listFriends,
+  clearDevStore,
   // Internal helpers (not exported): normalizeProfileImageReference, buildProfileImageFields
 };
