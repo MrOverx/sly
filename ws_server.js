@@ -5042,7 +5042,7 @@ io.on('connection', (socket) => {
       if (space && userId) {
         const participant = space.participants.find((p) => p.userId === userId);
         if (participant) {
-          participant.role = 'Speaker';
+          participant.role = data.assignedRole || 'OnStage';
           emitSpaceUpdated(space);
           broadcastActiveSpaces();
         }
@@ -5066,6 +5066,7 @@ io.on('connection', (socket) => {
           spaceId,
           userName,
           userId,
+          assignedRole: data.assignedRole || 'OnStage',
         });
         Logger.info('approve_speak_request', `Approved ${userName || userId} to speak`, {
           spaceId,
@@ -5097,6 +5098,76 @@ io.on('connection', (socket) => {
       }
     } catch (err) {
       Logger.error('decline_speak_request', 'Error declining speak request', err && err.message);
+    }
+  });
+
+  socket.on('destage_user', (data) => {
+    try {
+      const spaceId = data && data.spaceId ? String(data.spaceId) : null;
+      const userId = data && data.userId ? String(data.userId) : null;
+      if (!spaceId || !userId) return;
+
+      const space = activeVoiceSpaces.get(spaceId);
+      if (space) {
+        const participant = space.participants.find((p) => p.userId === userId);
+        if (participant) {
+          participant.role = 'Listener';
+          emitSpaceUpdated(space);
+          broadcastActiveSpaces();
+          Logger.info('destage_user', `Destaged user ${userId} in space ${spaceId}`);
+        }
+      }
+    } catch (err) {
+      Logger.error('destage_user', 'Error destaging user', err && err.message);
+    }
+  });
+
+  socket.on('promote_to_speaker', (data) => {
+    try {
+      const spaceId = data && data.spaceId ? String(data.spaceId) : null;
+      const userId = data && data.userId ? String(data.userId) : null;
+      if (!spaceId || !userId) return;
+
+      const space = activeVoiceSpaces.get(spaceId);
+      if (space) {
+        const participant = space.participants.find((p) => p.userId === userId);
+        if (participant) {
+          participant.role = 'Speaker';
+          emitSpaceUpdated(space);
+          broadcastActiveSpaces();
+          Logger.info('promote_to_speaker', `Promoted user ${userId} to speaker in space ${spaceId}`);
+        }
+      }
+    } catch (err) {
+      Logger.error('promote_to_speaker', 'Error promoting user to speaker', err && err.message);
+    }
+  });
+
+  socket.on('kick_participant', (data) => {
+    try {
+      const spaceId = data && data.spaceId ? String(data.spaceId) : null;
+      const targetUserId = data && data.targetUserId ? String(data.targetUserId) : null;
+      if (!spaceId || !targetUserId) return;
+
+      const space = activeVoiceSpaces.get(spaceId);
+      if (space) {
+        const participantIdx = space.participants.findIndex((p) => p.userId === targetUserId);
+        if (participantIdx !== -1) {
+          space.participants.splice(participantIdx, 1);
+          emitSpaceUpdated(space);
+          broadcastActiveSpaces();
+          io.to(spaceId).emit('participant_kicked', {
+            spaceId,
+            userId: targetUserId,
+            kickedByUserId: data.kickedByUserId,
+            kickedByUserName: data.kickedByUserName,
+            action: 'kick'
+          });
+          Logger.info('kick_participant', `Kicked user ${targetUserId} from space ${spaceId}`);
+        }
+      }
+    } catch (err) {
+      Logger.error('kick_participant', 'Error kicking participant', err && err.message);
     }
   });
 

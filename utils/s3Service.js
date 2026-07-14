@@ -84,10 +84,44 @@ function sanitizeFileName(value) {
     .toLowerCase();
 }
 
-function getS3ObjectKey(originalName, userId = null) {
+function extensionFromContentType(contentType) {
+  if (!contentType || typeof contentType !== 'string') {
+    return '';
+  }
+
+  const normalized = contentType.toLowerCase().trim();
+  if (normalized.includes('image/gif')) return '.gif';
+  if (normalized.includes('image/png')) return '.png';
+  if (normalized.includes('image/jpeg') || normalized.includes('image/jpg')) return '.jpg';
+  if (normalized.includes('image/webp')) return '.webp';
+  if (normalized.includes('image/bmp')) return '.bmp';
+  if (normalized.includes('image/svg+xml')) return '.svg';
+  if (normalized.includes('image/heic')) return '.heic';
+  if (normalized.includes('image/heif')) return '.heif';
+  return '';
+}
+
+function mimeTypeFromExtension(ext) {
+  if (!ext || typeof ext !== 'string') {
+    return '';
+  }
+
+  const normalized = ext.toLowerCase();
+  if (normalized === '.gif') return 'image/gif';
+  if (normalized === '.png') return 'image/png';
+  if (normalized === '.jpg' || normalized === '.jpeg') return 'image/jpeg';
+  if (normalized === '.webp') return 'image/webp';
+  if (normalized === '.bmp') return 'image/bmp';
+  if (normalized === '.svg') return 'image/svg+xml';
+  if (normalized === '.heic' || normalized === '.heif') return 'image/heic';
+  return '';
+}
+
+function getS3ObjectKey(originalName, userId = null, contentType = null) {
   ensureS3Config();
   const { profileFolder } = getS3Config();
-  const ext = path.extname(originalName || '');
+  const inferredExt = extensionFromContentType(contentType);
+  const ext = path.extname(originalName || '') || inferredExt || '.png';
   const folderBase = profileFolder.replace(/\/+$/, '');
 
   if (userId && typeof userId === 'string' && userId.trim().length > 0) {
@@ -236,12 +270,13 @@ async function uploadProfileImageToS3(buffer, originalName, contentType, userId 
 
   ensureS3SdkAvailable('upload profile images to S3');
 
-  const key = getS3ObjectKey(originalName, userId);
+  const key = getS3ObjectKey(originalName, userId, contentType);
+  const effectiveContentType = contentType || mimeTypeFromExtension(path.extname(key)) || 'application/octet-stream';
   const commandParams = {
     Bucket: bucket,
     Key: key,
     Body: buffer,
-    ContentType: contentType || 'application/octet-stream',
+    ContentType: effectiveContentType,
     CacheControl: 'public, max-age=604800',
     ContentDisposition: 'inline',
   };
@@ -301,4 +336,5 @@ module.exports = {
   deleteProfileImageFromS3,
   uploadProfileImageToS3,
   replaceProfileImageInS3,
+  mimeTypeFromExtension,
 };
