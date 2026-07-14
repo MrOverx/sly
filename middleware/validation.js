@@ -157,12 +157,59 @@ function validateProfileUpdate(req, res, next) {
       return sendError(res, 400, 'Invalid avatarColor value', 'VALIDATION_ERROR');
     }
 
-    if (status != null) {
-      if (typeof status !== 'string') {
-        return sendError(res, 400, 'Invalid status value', 'VALIDATION_ERROR');
-      }
+    const statusObject = status != null && typeof status === 'object' && !Array.isArray(status)
+      ? status
+      : null;
+    const inlineStatusNote = statusObject
+      ? statusObject.statusNote ?? statusObject
+      : null;
+
+    if (status != null && typeof status !== 'string' && !statusObject) {
+      return sendError(res, 400, 'Invalid status value', 'VALIDATION_ERROR');
+    }
+
+    if (typeof status === 'string') {
       if (status.trim().length > 150) {
         return sendError(res, 400, 'Status cannot exceed 150 characters', 'VALIDATION_ERROR');
+      }
+    }
+
+    if (statusObject) {
+      const note = inlineStatusNote?.note ?? statusObject.note;
+      const color = inlineStatusNote?.color ?? statusObject.color;
+      if (note != null && typeof note !== 'string') {
+        return sendError(res, 400, 'Invalid status.note value', 'VALIDATION_ERROR');
+      }
+      if (note != null && String(note).trim().length > 150) {
+        return sendError(res, 400, 'Status note cannot exceed 150 characters', 'VALIDATION_ERROR');
+      }
+      if (color != null && typeof color !== 'string') {
+        return sendError(res, 400, 'Invalid status.color value', 'VALIDATION_ERROR');
+      }
+      if (color != null && String(color).trim().length > 50) {
+        return sendError(res, 400, 'Status color cannot exceed 50 characters', 'VALIDATION_ERROR');
+      }
+    }
+
+    if (req.body.statusNote != null) {
+      const statusNote = req.body.statusNote;
+      if (typeof statusNote !== 'object' || Array.isArray(statusNote)) {
+        return sendError(res, 400, 'Invalid statusNote value', 'VALIDATION_ERROR');
+      }
+
+      const note = statusNote.note;
+      const color = statusNote.color;
+      if (note != null && typeof note !== 'string') {
+        return sendError(res, 400, 'Invalid statusNote.note value', 'VALIDATION_ERROR');
+      }
+      if (note != null && String(note).trim().length > 150) {
+        return sendError(res, 400, 'Status note cannot exceed 150 characters', 'VALIDATION_ERROR');
+      }
+      if (color != null && typeof color !== 'string') {
+        return sendError(res, 400, 'Invalid statusNote.color value', 'VALIDATION_ERROR');
+      }
+      if (color != null && String(color).trim().length > 50) {
+        return sendError(res, 400, 'Status note color cannot exceed 50 characters', 'VALIDATION_ERROR');
       }
     }
 
@@ -328,8 +375,33 @@ function validateProfileUpdate(req, res, next) {
     if (avatarColor && String(avatarColor).trim().length > 0) {
       sanitizedBody.avatarColor = String(avatarColor);
     }
-    if (status && String(status).trim().length > 0) {
+    if (status && typeof status === 'string' && String(status).trim().length > 0) {
       sanitizedBody.status = String(status).trim();
+    } else if (statusObject) {
+      const note = inlineStatusNote?.note ?? statusObject.note;
+      const color = inlineStatusNote?.color ?? statusObject.color;
+      const sanitizedStatusNote = {};
+      if (note != null && String(note).trim().length > 0) {
+        sanitizedStatusNote.note = String(note).trim();
+        sanitizedBody.status = String(note).trim();
+      }
+      if (color != null && String(color).trim().length > 0) {
+        sanitizedStatusNote.color = String(color).trim();
+      }
+      if (Object.keys(sanitizedStatusNote).length > 0) {
+        sanitizedBody.statusNote = sanitizedStatusNote;
+      }
+    }
+    if (req.body.statusNote != null && typeof req.body.statusNote === 'object') {
+      const rawStatusNote = req.body.statusNote;
+      const note = rawStatusNote.note != null ? String(rawStatusNote.note).trim() : null;
+      const color = rawStatusNote.color != null ? String(rawStatusNote.color).trim() : null;
+      const sanitizedStatusNote = {};
+      if (note != null && note.length > 0) sanitizedStatusNote.note = note;
+      if (color != null && color.length > 0) sanitizedStatusNote.color = color;
+      if (Object.keys(sanitizedStatusNote).length > 0) {
+        sanitizedBody.statusNote = sanitizedStatusNote;
+      }
     }
     if (bio && String(bio).trim().length > 0) {
       sanitizedBody.bio = String(bio).trim();

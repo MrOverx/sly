@@ -399,6 +399,22 @@ function buildUserItem(user) {
       })
     : [];
 
+  const statusObject = user.status && typeof user.status === 'object' && !Array.isArray(user.status)
+    ? user.status
+    : null;
+  const statusNoteFromUser = user.statusNote && typeof user.statusNote === 'object'
+    ? user.statusNote
+    : statusObject && typeof statusObject.statusNote === 'object'
+      ? statusObject.statusNote
+      : statusObject;
+  const statusNote = statusNoteFromUser
+    ? {
+        note: statusNoteFromUser.note != null ? String(statusNoteFromUser.note).trim() : null,
+        color: statusNoteFromUser.color != null ? String(statusNoteFromUser.color).trim() : null,
+      }
+    : null;
+  const statusText = statusNote?.note || (typeof user.status === 'string' ? String(user.status).trim() : null) || null;
+
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
     ...user,
@@ -412,7 +428,8 @@ function buildUserItem(user) {
     isGuest: Boolean(user.isGuest),
     gender: user.gender || 'other',
     country: user.country || null,
-    status: user.status || null,
+    status: statusText,
+    statusNote,
     statusUpdatedAt,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],

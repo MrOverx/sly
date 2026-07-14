@@ -116,6 +116,20 @@ function buildCompleteUserProfile(user) {
   const rawOnlineValue = user.isOnline ?? user.online ?? user.is_online ?? user.online_status ?? user.onlineStatus;
   const storedOnline = rawOnlineValue === true || rawOnlineValue === 'true' || rawOnlineValue === '1';
   const isOnline = storedOnline || (global.onlineUsers && normalizedUserId ? global.onlineUsers.has(normalizedUserId) : false);
+  const statusObject = user.status && typeof user.status === 'object' && !Array.isArray(user.status)
+    ? user.status
+    : null;
+  const statusNoteSource = user.statusNote && typeof user.statusNote === 'object'
+    ? user.statusNote
+    : statusObject && typeof statusObject.statusNote === 'object'
+      ? statusObject.statusNote
+      : statusObject;
+  const statusNote = statusNoteSource && typeof statusNoteSource === 'object'
+    ? {
+        note: statusNoteSource.note != null ? String(statusNoteSource.note).trim() : null,
+        color: statusNoteSource.color != null ? String(statusNoteSource.color).trim() : null,
+      }
+    : null;
 
   return {
     ...baseProfile,
@@ -147,7 +161,8 @@ function buildCompleteUserProfile(user) {
     gender: user.gender || 'other',
     birthDate: normalizeIsoTimestamp(user.birthDate),
     country: user.country || null,
-    status: user.status || null,
+    statusNote,
+    status: statusNote?.note || user.status || null,
     statusUpdatedAt: normalizeIsoTimestamp(user.statusUpdatedAt),
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
@@ -2472,6 +2487,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       gender,
       country,
       status,
+      statusNote,
       bio,
       interests,
       avatarColor,
@@ -2484,7 +2500,15 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       lastDailyXpAwardedAt,
     } = req.body;
 
-    const hasStatus = typeof status === 'string' && status.trim().length > 0;
+    const rawStatusNote = req.body.statusNote;
+    const statusObject = status && typeof status === 'object' && !Array.isArray(status) ? status : null;
+    const inlineStatusNote = statusObject
+      ? statusObject.statusNote ?? statusObject
+      : null;
+    const hasStatusNote = (rawStatusNote && typeof rawStatusNote === 'object' && rawStatusNote.note != null && String(rawStatusNote.note).trim().length > 0)
+      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0);
+    const hasStatus = typeof status === 'string' && status.trim().length > 0
+      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0);
     const hasBio = typeof bio === 'string' && bio.trim().length > 0;
     const hasInterests = Array.isArray(req.body.interests);
     const hasProfileImageUrl = typeof profileImageUrl === 'string' && profileImageUrl.trim().length > 0;
@@ -2531,7 +2555,26 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const normalizedCountry = normalizeStringInput(country);
     if (normalizedCountry) updateData.country = normalizedCountry;
 
-    if (hasStatus) {
+    if (hasStatusNote) {
+      const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object'
+        ? rawStatusNote
+        : inlineStatusNote;
+      const normalizedStatusNote = {
+        note: normalizeStringInput(sourceStatusNote.note, 150),
+        color: normalizeStringInput(sourceStatusNote.color, 50),
+      };
+      updateData.statusNote = {};
+      if (normalizedStatusNote.note) {
+        updateData.statusNote.note = normalizedStatusNote.note;
+        updateData.status = normalizedStatusNote.note;
+      }
+      if (normalizedStatusNote.color) {
+        updateData.statusNote.color = normalizedStatusNote.color;
+      }
+      if (existingUser.status !== normalizedStatusNote.note) {
+        updateData.statusUpdatedAt = new Date();
+      }
+    } else if (hasStatus) {
       const newStatus = normalizeStringInput(status, 150);
       updateData.status = newStatus;
       if (existingUser.status !== newStatus) {
@@ -2633,7 +2676,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       Logger.info('user/update', '✅ Profile marked as complete', { userId });
     }
 
-    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'profileImagePath', 'avatarLetter', 'useColorProfile', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'likedUserIds', 'friends', 'isOnline', 'isFriend', 'hasProfileChanged', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
+    const safeFields = ['email', 'userName', 'gender', 'country', 'status', 'statusNote', 'statusUpdatedAt', 'bio', 'interests', 'avatarColor', 'profileImageUrl', 'profileImagePath', 'avatarLetter', 'useColorProfile', 'pictureName', 'birthDate', 'authType', 'isGuest', 'xp', 'likedUserIds', 'friends', 'isOnline', 'isFriend', 'hasProfileChanged', 'lastDailyXpAwardedAt', 'profileComplete', 'updatedAt'];
     const safeUpdateData = {};
     for (const key of safeFields) {
       if (Object.prototype.hasOwnProperty.call(updateData, key)) {
@@ -2668,6 +2711,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
             : existingMeta.profileImagePath,
           country: user.country || existingMeta.country,
           gender: user.gender || existingMeta.gender,
+          statusNote: user.statusNote || existingMeta.statusNote,
           status: user.status || existingMeta.status,
           bio: user.bio || existingMeta.bio,
           interests: Array.isArray(user.interests) ? user.interests : existingMeta.interests,

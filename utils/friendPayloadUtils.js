@@ -155,6 +155,17 @@ function buildCompleteUserProfile(user) {
     : null;
   const profileImagePath = rawProfileImagePath || fallbackProfileImagePath;
 
+  const rawStatusNote = user.statusNote && typeof user.statusNote === 'object' ? user.statusNote : null;
+  const rawStatusObject = user.status && typeof user.status === 'object' ? user.status : null;
+  const statusNoteSource = rawStatusNote || rawStatusObject;
+  const statusNote = statusNoteSource && typeof statusNoteSource === 'object'
+    ? {
+        note: statusNoteSource.note != null ? String(statusNoteSource.note).trim() : null,
+        color: statusNoteSource.color != null ? String(statusNoteSource.color).trim() : null,
+      }
+    : null;
+  const statusText = statusNote?.note || (typeof user.status === 'string' ? String(user.status).trim() : null) || null;
+
   const profile = {
     itemType: 'USER',
     userId: user.userId || user.id || user._id || null,
@@ -180,7 +191,8 @@ function buildCompleteUserProfile(user) {
     gender: user.gender || 'other',
     birthDate: user.birthDate || null,
     country: user.country || null,
-    status: user.status || null,
+    statusNote,
+    status: statusText,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
