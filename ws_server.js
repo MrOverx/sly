@@ -60,7 +60,6 @@ const {
   getUserById,
   getUserByEmail,
   findUserByLookup,
-  upsertUser,
   createUser,
   updateUserById,
   deleteUserById,
@@ -188,6 +187,7 @@ const { normalizeFriendRequestStatus, buildFriendRequestPayload, buildCompleteUs
 const { sendOtpEmail, isEmailConfigured } = require('./utils/emailService');
 const { createOtpForEmail, verifyOtpForEmail, startOtpCleanup, stopOtpCleanup } = require('./utils/otpStore');
 const { uploadProfileImageToS3, replaceProfileImageInS3, deleteProfileImageFromS3, isS3Configured, isS3Url } = require('./utils/s3Service');
+const { extractStatusNotePayload } = require('./utils/statusNoteUtils');
 const cors = require('cors');
 const multer = require('multer');
 
@@ -2500,15 +2500,18 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       lastDailyXpAwardedAt,
     } = req.body;
 
-    const rawStatusNote = req.body.statusNote;
+      const rawStatusNote = req.body.statusNote;
     const statusObject = status && typeof status === 'object' && !Array.isArray(status) ? status : null;
     const inlineStatusNote = statusObject
       ? statusObject.statusNote ?? statusObject
       : null;
+    const nestedStatusNote = extractStatusNotePayload(status);
     const hasStatusNote = (rawStatusNote && typeof rawStatusNote === 'object' && rawStatusNote.note != null && String(rawStatusNote.note).trim().length > 0)
-      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0);
+      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0)
+      || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
     const hasStatus = typeof status === 'string' && status.trim().length > 0
-      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0);
+      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0)
+      || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
     const hasBio = typeof bio === 'string' && bio.trim().length > 0;
     const hasInterests = Array.isArray(req.body.interests);
     const hasProfileImageUrl = typeof profileImageUrl === 'string' && profileImageUrl.trim().length > 0;
@@ -2558,7 +2561,7 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     if (hasStatusNote) {
       const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object'
         ? rawStatusNote
-        : inlineStatusNote;
+        : inlineStatusNote || nestedStatusNote;
       const normalizedStatusNote = {
         note: normalizeStringInput(sourceStatusNote.note, 150),
         color: normalizeStringInput(sourceStatusNote.color, 50),

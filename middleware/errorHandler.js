@@ -23,42 +23,12 @@ class AppError extends Error {
 }
 
 /**
- * Validation error class
- */
-class ValidationError extends AppError {
-  constructor(message, details = null) {
-    super(message, 400, 'VALIDATION_ERROR', details);
-    this.name = 'ValidationError';
-  }
-}
-
-/**
  * Not found error class
  */
 class NotFoundError extends AppError {
   constructor(resource = 'Resource') {
     super(`${resource} not found`, 404, 'NOT_FOUND', null);
     this.name = 'NotFoundError';
-  }
-}
-
-/**
- * Unauthorized error class
- */
-class UnauthorizedError extends AppError {
-  constructor(message = 'Unauthorized access') {
-    super(message, 401, 'UNAUTHORIZED', null);
-    this.name = 'UnauthorizedError';
-  }
-}
-
-/**
- * Forbidden error class
- */
-class ForbiddenError extends AppError {
-  constructor(message = 'Access forbidden') {
-    super(message, 403, 'FORBIDDEN', null);
-    this.name = 'ForbiddenError';
   }
 }
 
