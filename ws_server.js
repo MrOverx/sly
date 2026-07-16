@@ -2536,11 +2536,14 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
       ? statusObject.statusNote ?? statusObject
       : null;
     const nestedStatusNote = extractStatusNotePayload(status);
-    const hasStatusNote = (rawStatusNote && typeof rawStatusNote === 'object' && rawStatusNote.note != null && String(rawStatusNote.note).trim().length > 0)
-      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0)
+    const inlineStatusNoteObject = inlineStatusNote && !Array.isArray(inlineStatusNote) && typeof inlineStatusNote === 'object'
+      ? inlineStatusNote
+      : null;
+    const hasStatusNote = (rawStatusNote && typeof rawStatusNote === 'object' && !Array.isArray(rawStatusNote) && rawStatusNote.note != null && String(rawStatusNote.note).trim().length > 0)
+      || (inlineStatusNoteObject && inlineStatusNoteObject.note != null && String(inlineStatusNoteObject.note).trim().length > 0)
       || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
     const hasStatus = typeof status === 'string' && status.trim().length > 0
-      || (inlineStatusNote && typeof inlineStatusNote === 'object' && inlineStatusNote.note != null && String(inlineStatusNote.note).trim().length > 0)
+      || (inlineStatusNoteObject && inlineStatusNoteObject.note != null && String(inlineStatusNoteObject.note).trim().length > 0)
       || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
     const hasBio = typeof bio === 'string' && bio.trim().length > 0;
     const hasInterests = Array.isArray(req.body.interests);
@@ -2590,9 +2593,9 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
 
     if (hasStatusNote || hasStatus) {
       // Normalize incoming status input and append to the nested `status.statusNote` history.
-      const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object'
+      const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object' && !Array.isArray(rawStatusNote)
         ? rawStatusNote
-        : inlineStatusNote || nestedStatusNote;
+        : inlineStatusNoteObject || nestedStatusNote;
 
       const incomingNote = hasStatusNote
         ? normalizeStringInput(sourceStatusNote.note, 150)
