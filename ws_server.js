@@ -2512,12 +2512,26 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const inlineStatusNoteObject = inlineStatusNote && !Array.isArray(inlineStatusNote) && typeof inlineStatusNote === 'object'
       ? inlineStatusNote
       : null;
+
+    const statusMediaEntries = Array.isArray(statusObject?.statusMedia)
+      ? statusObject.statusMedia
+      : [];
+
+    // ✅ NEW: Properly detect nested status array structure
+    // Frontend now sends: { status: { statusNote: [array], statusMedia: [] } }
+    const isNestedStatusArray = Array.isArray(inlineStatusNote);
+    const nestedStatusArray = isNestedStatusArray ? inlineStatusNote : null;
+    const hasStatusMedia = statusMediaEntries.length > 0;
+
     const hasStatusNote = (rawStatusNote && typeof rawStatusNote === 'object' && !Array.isArray(rawStatusNote) && rawStatusNote.note != null && String(rawStatusNote.note).trim().length > 0)
+      || (isNestedStatusArray && nestedStatusArray.length > 0 && nestedStatusArray[0]?.note != null)
       || (inlineStatusNoteObject && inlineStatusNoteObject.note != null && String(inlineStatusNoteObject.note).trim().length > 0)
       || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
     const hasStatus = typeof status === 'string' && status.trim().length > 0
+      || (isNestedStatusArray && nestedStatusArray.length > 0)
       || (inlineStatusNoteObject && inlineStatusNoteObject.note != null && String(inlineStatusNoteObject.note).trim().length > 0)
-      || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0);
+      || (nestedStatusNote && typeof nestedStatusNote === 'object' && nestedStatusNote.note != null && String(nestedStatusNote.note).trim().length > 0)
+      || hasStatusMedia;
     const hasBio = typeof bio === 'string' && bio.trim().length > 0;
     const hasInterests = Array.isArray(req.body.interests);
     const hasProfileImageUrl = typeof profileImageUrl === 'string' && profileImageUrl.trim().length > 0;
@@ -2566,31 +2580,77 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
 
     if (hasStatusNote || hasStatus) {
       // Normalize incoming status input and append to the nested `status.statusNote` history.
-      const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object' && !Array.isArray(rawStatusNote)
-        ? rawStatusNote
-        : inlineStatusNoteObject || nestedStatusNote;
+      let incomingStatusNotes = [];
+      let incomingStatusMedia = [];
 
-      const incomingNote = hasStatusNote
-        ? normalizeStringInput(sourceStatusNote.note, 150)
-        : normalizeStringInput(status, 150);
-      const incomingColor = hasStatusNote
-        ? normalizeStringInput(sourceStatusNote.color, 50)
-        : null;
+      if (statusObject) {
+        const rawStatusNoteEntries = Array.isArray(statusObject.statusNote)
+          ? statusObject.statusNote
+          : (statusObject.statusNote && typeof statusObject.statusNote === 'object')
+              ? [statusObject.statusNote]
+              : [];
 
-      const nowIso = new Date().toISOString();
-      const newEntry = { note: incomingNote || null, color: incomingColor || null, createdAt: nowIso };
+        incomingStatusNotes = rawStatusNoteEntries
+            .map((entry) => {
+              if (typeof entry === 'string') {
+                const normalizedNote = normalizeStringInput(entry, 150);
+                return normalizedNote
+                    ? { note: normalizedNote, color: null, createdAt: new Date().toISOString() }
+                    : null;
+              }
+
+              if (entry && typeof entry === 'object') {
+                const note = normalizeStringInput(entry.note, 150);
+                return note
+                    ? {
+                        note,
+                        color: entry.color ? normalizeStringInput(entry.color, 50) : null,
+                        createdAt: entry.createdAt ? String(entry.createdAt).trim() : new Date().toISOString(),
+                      }
+                    : null;
+              }
+
+              return null;
+            })
+            .filter((entry) => entry != null);
+
+        incomingStatusMedia = Array.isArray(statusObject.statusMedia)
+            ? statusObject.statusMedia
+            : [];
+      }
+
+      if (incomingStatusNotes.length === 0 && incomingStatusMedia.length === 0) {
+        const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object' && !Array.isArray(rawStatusNote)
+          ? rawStatusNote
+          : inlineStatusNoteObject || nestedStatusNote;
+
+        const incomingNote = hasStatusNote
+          ? normalizeStringInput(sourceStatusNote?.note, 150)
+          : normalizeStringInput(status, 150);
+        const incomingColor = hasStatusNote
+          ? normalizeStringInput(sourceStatusNote?.color, 50)
+          : null;
+
+        if (incomingNote) {
+          incomingStatusNotes = [{
+            note: incomingNote,
+            color: incomingColor || null,
+            createdAt: new Date().toISOString(),
+          }];
+        }
+      }
+
       const existingStatusNotes = Array.isArray(existingUser.status?.statusNote)
         ? existingUser.status.statusNote.slice()
         : [];
       const existingMedia = Array.isArray(existingUser.status?.statusMedia)
         ? existingUser.status.statusMedia.slice()
         : [];
-      const incomingMedia = Array.isArray(status?.statusMedia) ? status.statusMedia : [];
-      const mergedMedia = incomingMedia.length ? incomingMedia : existingMedia;
-      const mergedStatusNotes = existingStatusNotes.concat(newEntry);
+      const mergedMedia = incomingStatusMedia.length ? incomingStatusMedia : existingMedia;
+      const mergedStatusNotes = existingStatusNotes.concat(incomingStatusNotes);
       const mergedStatusPayload = {
         statusNote: mergedStatusNotes,
-        ...(mergedMedia.length ? { statusMedia: mergedMedia } : {}),
+        statusMedia: mergedMedia,
       };
 
       updateData.status = mergedStatusPayload;
