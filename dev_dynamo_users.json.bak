@@ -1,40 +1,60 @@
-[
+﻿[
   {
-    "PK": "USER#sender-1",
+    "PK": "USER#userA",
     "SK": "METADATA",
-    "userId": "sender-1",
-    "userName": "sender",
-    "email": "sender@example.com",
-    "isGuest": false,
+    "userId": "userA",
+    "email": "usera@example.com",
+    "userName": "User A",
     "itemType": "USER",
-    "name": "sender",
-    "displayName": "sender",
+    "name": "User A",
+    "displayName": "User A",
     "authType": "MAIL",
+    "isGuest": false,
     "gender": "other",
-    "country": null,
-    "status": null,
-    "statusUpdatedAt": null,
+    "country": "US",
+
     "bio": null,
     "interests": [],
     "birthDate": null,
     "profileComplete": false,
     "avatarColor": "#128C7E",
-    "avatarLetter": "S",
+    "avatarLetter": "U",
     "useColorProfile": true,
     "hasProfileChanged": false,
     "isFriend": false,
     "isOnline": false,
     "profileImageUrl": null,
     "profileImagePath": null,
-    "profile_image_url": null,
-    "profile_image_path": null,
-    "avatarUrl": null,
-    "avatar_url": null,
-    "displayImageUrl": null,
-    "display_image_url": null,
-    "displayImagePath": null,
-    "display_image_path": null,
+
+"status": 
+    {
+      "statusNote":[
+        {
+        
+        "note": null,
+        "color": null,
+        "createdAt":  null
+      }
+    ],
+      "statusMedia": [
+
+      {
+        "caption": null,
+        "updatedAt": null,
+        "media": [
+          {
+            "type": null,
+            "url": null
+          }
+        ]
+      }
+    ]
+    }
+  ,
+
     "pictureName": null,
+    "friendRequests": [],
+    "pendingFriendRequests": [],
     "passwordHash": null,
     "emailVerified": false,
     "emailVerifiedAt": null,
@@ -42,29 +62,13 @@
     "xp": {},
     "likedUserIds": [],
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-07-08T16:43:59.936Z",
-    "updatedAt": "2026-07-08T16:43:59.949Z",
-    "lastLogin": "2026-07-08T16:43:59.936Z",
-    "normalizedEmail": "sender@example.com",
-    "emailLower": "sender@example.com",
-    "friendRequests": [
-      {
-        "requestId": "sender-1|recipient-1",
-        "status": "pending",
-        "createdAt": "2026-07-08T16:43:59.945Z",
-        "senderId": "sender-1",
-        "requestType": "FRIEND_REQUEST_OUTGOING",
-        "isRead": false,
-        "isIncoming": false,
-        "sender": {
-          "userId": "sender-1",
-          "userName": "sender"
-        },
-        "receiver": {
-          "userId": "recipient-1",
-          "userName": "recipient"
-        }
-      }
-    ]
+    "createdAt": "2026-07-16T11:33:16.893Z",
+    "updatedAt": "2026-07-16T11:33:16.893Z",
+    "lastLogin": "2026-07-16T11:33:16.893Z",
+    "normalizedEmail": "usera@example.com",
+    "emailLower": "usera@example.com",
+    "friends": [],
+    "friendIds": []
   }
+ 
 ]

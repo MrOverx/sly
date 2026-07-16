@@ -236,30 +236,11 @@ function buildProfileImageFields(user) {
   const safeProfileImageUrl = resolveProfileImageReference({ profileImageUrl, profileImagePath });
   const safeProfileImagePath = profileImagePath || safeProfileImageUrl || null;
 
-  const baseFields = {
-    profileImageUrl: safeProfileImageUrl,
-    profileImagePath: safeProfileImagePath,
-    profile_image_url: safeProfileImageUrl,
-    profile_image_path: safeProfileImagePath,
-    avatarUrl: safeProfileImageUrl,
-    avatar_url: safeProfileImageUrl,
-    displayImageUrl: safeProfileImageUrl,
-    display_image_url: safeProfileImageUrl,
-    displayImagePath: safeProfileImagePath,
-    display_image_path: safeProfileImagePath,
+  // Only output canonical fields matching the frontend model
+  return {
+    profileImageUrl: safeProfileImageUrl || null,
+    profileImagePath: safeProfileImagePath || null,
   };
-
-  if (profileImageUrl && profileImagePath && profileImageUrl === profileImagePath) {
-    return {
-      ...baseFields,
-      profileImagePath: null,
-      profile_image_path: null,
-      displayImagePath: null,
-      display_image_path: null,
-    };
-  }
-
-  return baseFields;
 }
 
 function buildItemKey(prefix, id, sk = METADATA_SK) {
@@ -453,24 +434,18 @@ function buildUserItem(user) {
 
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
-    ...user,
     itemType: 'USER',
     userId: String(user.userId),
     userName: displayName,
-    name: user.name || displayName,
-    displayName: user.displayName || displayName,
     email: emailValue,
     authType,
     isGuest: Boolean(user.isGuest),
     gender: user.gender || 'other',
     country: user.country || null,
-    // The status payload is stored as a nested object with historical notes.
-    status: Object.keys(nestedStatus).length ? nestedStatus : statusText,
-    statusUpdatedAt,
+    status: Object.keys(nestedStatus).length ? nestedStatus : (statusText ? { statusNote: [{ note: statusText, color: null, createdAt: now }] } : { statusNote: [], statusMedia: [] }),
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
     birthDate,
-    profileComplete: Boolean(user.profileComplete),
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (user.userName ? user.userName.charAt(0).toUpperCase() : 'U'),
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
@@ -480,7 +455,6 @@ function buildUserItem(user) {
     ...buildProfileImageFields(user),
     pictureName: user.pictureName || null,
     friendRequests: normalizedFriendRequests,
-    pendingFriendRequests: normalizedFriendRequests.filter((request) => String(request.status || '').trim().toLowerCase() === 'pending'),
     passwordHash: user.passwordHash || null,
     emailVerified: Boolean(user.emailVerified),
     emailVerifiedAt,
@@ -488,6 +462,7 @@ function buildUserItem(user) {
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
     likedUserIds: Array.isArray(user.likedUserIds) ? user.likedUserIds : [],
     lastDailyXpAwardedAt: toIso(user.lastDailyXpAwardedAt) || null,
+    friends: Array.isArray(user.friends) ? user.friends : [],
     createdAt,
     updatedAt,
     lastLogin,

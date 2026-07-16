@@ -126,57 +126,27 @@ function buildCompleteUserProfile(user) {
     : (Array.isArray(user.statusMedia) ? user.statusMedia : []);
   const statusPayload = Object.keys(statusObject || {}).length || statusNoteEntries.length || statusMediaEntries.length
     ? {
-        ...(statusNoteEntries.length ? { statusNote: statusNoteEntries } : {}),
-        ...(statusMediaEntries.length ? { statusMedia: statusMediaEntries } : {}),
+        statusNote: statusNoteEntries,
+        statusMedia: statusMediaEntries,
       }
-    : null;
-  const statusNoteSource = user.statusNote && typeof user.statusNote === 'object'
-    ? user.statusNote
-    : (statusPayload && Array.isArray(statusPayload.statusNote) && statusPayload.statusNote.length > 0
-      ? statusPayload.statusNote[statusPayload.statusNote.length - 1]
-      : (statusObject && typeof statusObject.statusNote === 'object'
-        ? statusObject.statusNote
-        : statusObject));
-  const statusNote = statusNoteSource && typeof statusNoteSource === 'object'
-    ? {
-        note: statusNoteSource.note != null ? String(statusNoteSource.note).trim() : null,
-        color: statusNoteSource.color != null ? String(statusNoteSource.color).trim() : null,
-      }
-    : null;
+    : { statusNote: [], statusMedia: [] };
 
   return {
     ...baseProfile,
     itemType: 'USER',
     userId: normalizedUserId || null,
-    id: normalizedUserId || null,
-    user_id: normalizedUserId || null,
     userName: displayName,
-    name: displayName,
-    displayName: displayName,
     email: user.email || null,
-    normalizedEmail,
-    emailVerified,
-    emailVerifiedAt,
     avatarColor: user.avatarColor || '#128C7E',
     avatarLetter: user.avatarLetter || (displayName ? String(displayName).charAt(0).toUpperCase() : 'U'),
-    avatarUrl: profileImageUrl,
-    avatar_url: profileImageUrl,
     profileImagePath,
-    profile_image_path: profileImagePath,
     profileImageUrl,
-    profile_image_url: profileImageUrl,
-    displayImagePath: profileImagePath,
-    display_image_path: profileImagePath,
-    displayImageUrl: profileImageUrl,
-    display_image_url: profileImageUrl,
     pictureName: user.pictureName || null,
     useColorProfile: user.useColorProfile !== undefined ? Boolean(user.useColorProfile) : true,
     gender: user.gender || 'other',
     birthDate: normalizeIsoTimestamp(user.birthDate),
     country: user.country || null,
-    statusNote,
-    status: statusPayload || (statusNote?.note ? { statusNote: [{ note: statusNote.note, color: statusNote.color || null }] } : (user.status && typeof user.status === 'object' ? user.status : null)),
-    statusUpdatedAt: normalizeIsoTimestamp(user.statusUpdatedAt),
+    status: statusPayload,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
     xp: typeof user.xp === 'object' && user.xp !== null ? user.xp : {},
@@ -187,7 +157,10 @@ function buildCompleteUserProfile(user) {
     isOnline,
     isFriend: user.isFriend === true,
     lastDailyXpAwardedAt: normalizeIsoTimestamp(user.lastDailyXpAwardedAt),
-    profileComplete: user.profileComplete === true,
+    emailVerified,
+    emailVerifiedAt,
+    friends: Array.isArray(user.friends) ? user.friends : [],
+    friendRequests: Array.isArray(user.friendRequests) ? user.friendRequests : [],
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
   };

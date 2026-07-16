@@ -15,10 +15,13 @@ function extractStatusNotePayload(value) {
   }
 
   if (typeof value === 'object') {
-    const nestedStatusNote = value.statusNote && typeof value.statusNote === 'object'
-      ? value.statusNote
-      : null;
-    const source = nestedStatusNote || value;
+    const nestedStatusNote = value.statusNote != null ? value.statusNote : null;
+    if (nestedStatusNote != null) {
+      const nestedResult = extractStatusNotePayload(nestedStatusNote);
+      if (nestedResult) return nestedResult;
+    }
+
+    const source = value;
     const note = source && source.note != null ? String(source.note).trim() : null;
     const color = source && source.color != null ? String(source.color).trim() : null;
 
