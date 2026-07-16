@@ -38,6 +38,7 @@ if (process.env.TEST_DISABLE_AWS !== 'true') {
 }
 const { Logger } = require('./logger');
 const { resolveProfileImageReference, normalizeProfileImageReference } = require('./friendPayloadUtils');
+const { normalizeStatusList, pickLatestStatus } = require('./statusNoteUtils');
 const crypto = require('crypto');
 
 const TABLE_NAME = process.env.DYNAMODB_TABLE || 'oververseDB';
@@ -347,7 +348,7 @@ function buildUserItem(user) {
   const createdAt = toIso(user.createdAt) || now;
   const updatedAt = toIso(user.updatedAt) || now;
   const lastLogin = toIso(user.lastLogin) || now;
-  const statusUpdatedAt = user.statusUpdatedAt ? toIso(user.statusUpdatedAt) : (user.status ? now : null);
+  const origStatusUpdatedAt = user.statusUpdatedAt ? toIso(user.statusUpdatedAt) : (user.status ? now : null);
   const emailVerifiedAt = user.emailVerifiedAt ? toIso(user.emailVerifiedAt) : null;
   const birthDate = toIso(user.birthDate) || null;
 
@@ -399,21 +400,56 @@ function buildUserItem(user) {
       })
     : [];
 
+  // Support new `status` object model: { statusNote: [...], statusMedia: [...] }
+  let statusArrayNormalized = [];
   const statusObject = user.status && typeof user.status === 'object' && !Array.isArray(user.status)
     ? user.status
     : null;
+  if (Array.isArray(user.status)) {
+    statusArrayNormalized = normalizeStatusList(user.status);
+  } else if (statusObject && Array.isArray(statusObject.statusNote)) {
+    statusArrayNormalized = normalizeStatusList(statusObject.statusNote);
+  }
+
+  const statusMediaNormalized = (statusObject && Array.isArray(statusObject.statusMedia))
+    ? statusObject.statusMedia
+    : (Array.isArray(user.statusMedia) ? user.statusMedia : []);
   const statusNoteFromUser = user.statusNote && typeof user.statusNote === 'object'
     ? user.statusNote
-    : statusObject && typeof statusObject.statusNote === 'object'
+    : (statusObject && (typeof statusObject.statusNote === 'object' || Array.isArray(statusObject.statusNote))
       ? statusObject.statusNote
-      : statusObject;
-  const statusNote = statusNoteFromUser
-    ? {
-        note: statusNoteFromUser.note != null ? String(statusNoteFromUser.note).trim() : null,
-        color: statusNoteFromUser.color != null ? String(statusNoteFromUser.color).trim() : null,
-      }
-    : null;
-  const statusText = statusNote?.note || (typeof user.status === 'string' ? String(user.status).trim() : null) || null;
+      : statusObject);
+
+  let statusNote = null;
+  let statusText = null;
+  let statusUpdatedAt = origStatusUpdatedAt;
+
+  if (statusArrayNormalized.length) {
+    const latest = pickLatestStatus(statusArrayNormalized);
+    if (latest) {
+      statusNote = {
+        note: latest.note != null ? String(latest.note).trim() : null,
+        color: latest.color != null ? String(latest.color).trim() : null,
+      };
+      statusText = statusNote.note || null;
+      statusUpdatedAt = latest.createdAt || statusUpdatedAt;
+    }
+  } else {
+    statusNote = statusNoteFromUser
+      ? {
+          note: statusNoteFromUser.note != null ? String(statusNoteFromUser.note).trim() : null,
+          color: statusNoteFromUser.color != null ? String(statusNoteFromUser.color).trim() : null,
+        }
+      : null;
+    statusText = statusNote?.note || (typeof user.status === 'string' ? String(user.status).trim() : null) || null;
+  }
+
+  const nestedStatus = {};
+  if (statusArrayNormalized.length) nestedStatus.statusNote = statusArrayNormalized;
+  if (Array.isArray(statusMediaNormalized) && statusMediaNormalized.length) nestedStatus.statusMedia = statusMediaNormalized;
+  if (!Object.keys(nestedStatus).length && statusText) {
+    nestedStatus.statusNote = [{ note: statusText, color: statusNote?.color || null, createdAt: statusUpdatedAt || null }];
+  }
 
   const item = {
     ...buildItemKey(USER_PREFIX, user.userId),
@@ -428,8 +464,8 @@ function buildUserItem(user) {
     isGuest: Boolean(user.isGuest),
     gender: user.gender || 'other',
     country: user.country || null,
-    status: statusText,
-    statusNote,
+    // The status payload is stored as a nested object with historical notes.
+    status: Object.keys(nestedStatus).length ? nestedStatus : statusText,
     statusUpdatedAt,
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
@@ -1060,36 +1096,105 @@ async function searchUsers(query, limit = 25) {
 }
 
 async function clearExpiredStatuses(cutoffIso) {
+  // Scan users that have nested status payloads or a legacy single status value.
   const result = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
-    FilterExpression: 'itemType = :userType AND attribute_exists(#status) AND #status <> :empty AND statusUpdatedAt < :cutoff',
+    FilterExpression: 'itemType = :userType AND attribute_exists(#status)',
     ExpressionAttributeNames: {
       '#status': 'status',
+      '#statusUpdatedAt': 'statusUpdatedAt',
     },
     ExpressionAttributeValues: {
       ':userType': 'USER',
-      ':empty': '',
       ':cutoff': cutoffIso,
     },
-    ProjectionExpression: 'PK, SK',
+    ProjectionExpression: 'PK, SK, #status, #statusUpdatedAt',
   }));
 
   if (!result.Items || !result.Items.length) return 0;
 
-  const deletePromises = result.Items.map((item) =>
-    ddb.send(new UpdateCommand({
-      TableName: TABLE_NAME,
-      Key: { PK: item.PK, SK: item.SK },
-      UpdateExpression: 'REMOVE #status, #statusUpdatedAt',
-      ExpressionAttributeNames: {
-        '#status': 'status',
-        '#statusUpdatedAt': 'statusUpdatedAt',
-      },
-    }))
-  );
+  const cutoffDate = new Date(cutoffIso);
+  const updatePromises = result.Items.map(async (item) => {
+    const key = { PK: item.PK, SK: item.SK };
 
-  await Promise.all(deletePromises);
-  return result.Items.length;
+    // If the item has a nested status payload, filter out old entries.
+    const statusPayload = item.status && typeof item.status === 'object' && !Array.isArray(item.status)
+      ? item.status
+      : null;
+    const originalEntries = Array.isArray(statusPayload?.statusNote)
+      ? statusPayload.statusNote.slice()
+      : [];
+
+    if (originalEntries.length) {
+      const filtered = originalEntries.filter((entry) => {
+        if (!entry) return false;
+        if (!entry.createdAt) return false; // treat unknown age as expired
+        const dt = new Date(entry.createdAt);
+        return !Number.isNaN(dt.getTime()) && dt >= cutoffDate;
+      });
+
+      if (filtered.length === originalEntries.length) {
+        if (item.status && item.statusUpdatedAt && new Date(item.statusUpdatedAt) < cutoffDate) {
+          return ddb.send(new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: key,
+            UpdateExpression: 'REMOVE #status, #statusUpdatedAt',
+            ExpressionAttributeNames: { '#status': 'status', '#statusUpdatedAt': 'statusUpdatedAt' },
+          }));
+        }
+        return null;
+      }
+
+      if (filtered.length === 0) {
+        return ddb.send(new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: key,
+          UpdateExpression: 'REMOVE #status, #statusUpdatedAt',
+          ExpressionAttributeNames: { '#status': 'status', '#statusUpdatedAt': 'statusUpdatedAt' },
+        }));
+      }
+
+      const latest = pickLatestStatus(filtered);
+      const newStatusPayload = {
+        ...(Array.isArray(statusPayload?.statusMedia) && statusPayload.statusMedia.length ? { statusMedia: statusPayload.statusMedia } : {}),
+        statusNote: filtered,
+      };
+      const newStatusNote = latest ? { note: latest.note || null, color: latest.color || null } : null;
+      const newStatusUpdatedAt = latest && latest.createdAt ? latest.createdAt : null;
+
+      return ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: key,
+        UpdateExpression: 'SET #status = :s, #statusNote = :sn, #statusUpdatedAt = :su',
+        ExpressionAttributeNames: {
+          '#status': 'status',
+          '#statusNote': 'statusNote',
+          '#statusUpdatedAt': 'statusUpdatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':s': newStatusPayload,
+          ':sn': newStatusNote,
+          ':su': newStatusUpdatedAt,
+        },
+      }));
+    }
+
+    // Fallback: single `status` value expired — remove it.
+    if (item.status && item.statusUpdatedAt && new Date(item.statusUpdatedAt) < cutoffDate) {
+      return ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: key,
+        UpdateExpression: 'REMOVE #status, #statusUpdatedAt',
+        ExpressionAttributeNames: { '#status': 'status', '#statusUpdatedAt': 'statusUpdatedAt' },
+      }));
+    }
+
+    return null;
+  });
+
+  const results = await Promise.all(updatePromises);
+  // Count non-null updates
+  return results.filter(Boolean).length;
 }
 
 async function getUsersByIds(userIds) {
@@ -1097,23 +1202,42 @@ async function getUsersByIds(userIds) {
     return [];
   }
 
+  const uniqueUserIds = [...new Set(userIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!uniqueUserIds.length) {
+    return [];
+  }
+
   if (USE_DEV_STORE) {
     const items = loadDevStore();
     const found = items
-      .filter((it) => it.itemType === 'USER' && userIds.includes(String(it.userId)))
+      .filter((it) => it.itemType === 'USER' && uniqueUserIds.includes(String(it.userId)))
       .map(normalizeDdbItem);
-    return found;
+    const foundById = new Map(found.map((item) => [String(item.userId), item]));
+    return uniqueUserIds.map((id) => foundById.get(id)).filter(Boolean);
   }
 
-  const keys = userIds.map((id) => buildItemKey(USER_PREFIX, id));
-  const result = await ddb.send(new BatchGetCommand({
-    RequestItems: {
-      [TABLE_NAME]: {
-        Keys: keys,
+  const batchSize = 100;
+  const results = [];
+
+  for (let index = 0; index < uniqueUserIds.length; index += batchSize) {
+    const batchIds = uniqueUserIds.slice(index, index + batchSize);
+    const keys = batchIds.map((id) => buildItemKey(USER_PREFIX, id));
+    const result = await ddb.send(new BatchGetCommand({
+      RequestItems: {
+        [TABLE_NAME]: {
+          Keys: keys,
+        },
       },
-    },
-  }));
-  return result.Responses && result.Responses[TABLE_NAME] ? (result.Responses[TABLE_NAME].map(normalizeDdbItem)) : [];
+    }));
+
+    const batchItems = result.Responses && result.Responses[TABLE_NAME]
+      ? result.Responses[TABLE_NAME].map(normalizeDdbItem)
+      : [];
+    results.push(...batchItems);
+  }
+
+  const foundById = new Map(results.map((item) => [String(item.userId), item]));
+  return uniqueUserIds.map((id) => foundById.get(id)).filter(Boolean);
 }
 
 async function getActiveBlock(userId) {

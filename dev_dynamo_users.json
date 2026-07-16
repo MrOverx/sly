@@ -45,9 +45,9 @@
     "xp": {},
     "likedUserIds": [],
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-07-15T14:46:00.328Z",
-    "updatedAt": "2026-07-15T14:46:00.350Z",
-    "lastLogin": "2026-07-15T14:46:00.328Z",
+    "createdAt": "2026-07-16T11:33:16.893Z",
+    "updatedAt": "2026-07-16T11:33:16.914Z",
+    "lastLogin": "2026-07-16T11:33:16.893Z",
     "normalizedEmail": "usera@example.com",
     "emailLower": "usera@example.com",
     "friends": [],
@@ -99,12 +99,105 @@
     "xp": {},
     "likedUserIds": [],
     "lastDailyXpAwardedAt": null,
-    "createdAt": "2026-07-15T14:46:00.330Z",
-    "updatedAt": "2026-07-15T14:46:00.352Z",
-    "lastLogin": "2026-07-15T14:46:00.330Z",
+    "createdAt": "2026-07-16T11:33:16.895Z",
+    "updatedAt": "2026-07-16T11:33:16.915Z",
+    "lastLogin": "2026-07-16T11:33:16.895Z",
     "normalizedEmail": "userb@example.com",
     "emailLower": "userb@example.com",
     "friends": [],
     "friendIds": []
+  },
+  {
+    "PK": "USER#userC",
+    "SK": "METADATA",
+    "userId": "userC",
+    "email": "userc@example.com",
+    "userName": "User C",
+    "itemType": "USER",
+    "name": "User C",
+    "displayName": "User C",
+    "authType": "MAIL",
+    "isGuest": false,
+    "gender": "female",
+    "country": "CA",
+    "status": {
+      "statusNote": [
+        {
+          "note": "Playing guitar",
+          "color": "#7C3AED",
+          "createdAt": "2026-07-16T10:00:00.000Z"
+        },
+        {
+          "note": "Listening to jazz",
+          "color": "#0284C7",
+          "createdAt": "2026-07-15T18:00:00.000Z"
+        }
+      ],
+      "statusMedia": [
+        {
+          "caption": "jam session",
+          "updatedAt": "2026-07-16T10:15:00.000Z",
+          "media": [
+            {
+              "type": "image",
+              "url": "https://cdn.example.com/status/guitar.png"
+            }
+          ]
+        }
+      ]
+    },
+    "statusNote": { "note": "Playing guitar", "color": "#7C3AED" },
+    "statusUpdatedAt": "2026-07-16T10:30:00.000Z",
+    "statusList": [
+      {
+        "note": "Playing guitar",
+        "color": "#7C3AED",
+        "createdAt": "2026-07-16T10:00:00.000Z"
+      },
+      {
+        "note": "Listening to jazz",
+        "color": "#0284C7",
+        "createdAt": "2026-07-15T18:00:00.000Z"
+      }
+    ],
+    "bio": "Guitarist and developer building music-first social experiences.",
+    "interests": ["music", "coding", "live shows"],
+    "birthDate": "1993-06-10T00:00:00.000Z",
+    "profileComplete": true,
+    "avatarColor": "#7C3AED",
+    "avatarLetter": "C",
+    "useColorProfile": true,
+    "hasProfileChanged": true,
+    "isFriend": false,
+    "isOnline": true,
+    "profileImageUrl": "https://cdn.example.com/userc.png",
+    "profileImagePath": null,
+    "profile_image_url": null,
+    "profile_image_path": null,
+    "avatarUrl": null,
+    "avatar_url": null,
+    "displayImageUrl": null,
+    "display_image_url": null,
+    "displayImagePath": null,
+    "display_image_path": null,
+    "pictureName": "guitar.png",
+    "friendRequests": [],
+    "pendingFriendRequests": [],
+    "passwordHash": null,
+    "emailVerified": true,
+    "emailVerifiedAt": "2026-07-16T10:00:00.000Z",
+    "isActive": true,
+    "xp": {"base": 200, "daily": 25},
+    "likedUserIds": ["userA"],
+    "lastDailyXpAwardedAt": "2026-07-16T05:00:00.000Z",
+    "createdAt": "2026-07-16T10:00:00.000Z",
+    "updatedAt": "2026-07-16T10:30:00.000Z",
+    "lastLogin": "2026-07-16T10:30:00.000Z",
+    "normalizedEmail": "userc@example.com",
+    "emailLower": "userc@example.com",
+    "friends": [
+      {"friendId": "userA", "addedAt": "2026-07-10T15:00:00.000Z"}
+    ],
+    "friendIds": ["userA"]
   }
 ]

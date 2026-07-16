@@ -118,11 +118,25 @@ function buildCompleteUserProfile(user) {
   const statusObject = user.status && typeof user.status === 'object' && !Array.isArray(user.status)
     ? user.status
     : null;
+  const statusNoteEntries = Array.isArray(statusObject?.statusNote)
+    ? statusObject.statusNote
+    : [];
+  const statusMediaEntries = Array.isArray(statusObject?.statusMedia)
+    ? statusObject.statusMedia
+    : (Array.isArray(user.statusMedia) ? user.statusMedia : []);
+  const statusPayload = Object.keys(statusObject || {}).length || statusNoteEntries.length || statusMediaEntries.length
+    ? {
+        ...(statusNoteEntries.length ? { statusNote: statusNoteEntries } : {}),
+        ...(statusMediaEntries.length ? { statusMedia: statusMediaEntries } : {}),
+      }
+    : null;
   const statusNoteSource = user.statusNote && typeof user.statusNote === 'object'
     ? user.statusNote
-    : statusObject && typeof statusObject.statusNote === 'object'
-      ? statusObject.statusNote
-      : statusObject;
+    : (statusPayload && Array.isArray(statusPayload.statusNote) && statusPayload.statusNote.length > 0
+      ? statusPayload.statusNote[statusPayload.statusNote.length - 1]
+      : (statusObject && typeof statusObject.statusNote === 'object'
+        ? statusObject.statusNote
+        : statusObject));
   const statusNote = statusNoteSource && typeof statusNoteSource === 'object'
     ? {
         note: statusNoteSource.note != null ? String(statusNoteSource.note).trim() : null,
@@ -161,7 +175,7 @@ function buildCompleteUserProfile(user) {
     birthDate: normalizeIsoTimestamp(user.birthDate),
     country: user.country || null,
     statusNote,
-    status: statusNote?.note || user.status || null,
+    status: statusPayload || (statusNote?.note ? { statusNote: [{ note: statusNote.note, color: statusNote.color || null }] } : (user.status && typeof user.status === 'object' ? user.status : null)),
     statusUpdatedAt: normalizeIsoTimestamp(user.statusUpdatedAt),
     bio: user.bio || null,
     interests: Array.isArray(user.interests) ? user.interests : [],
@@ -586,7 +600,6 @@ let voiceSpaceCleanupInterval = null;
 let statusCleanupInterval = null;
 let rateLimitCleanupInterval = null;
 let otpCleanupInterval = null;
-let offlineMessagesCleanupInterval = null;
 let socketRateLimitCleanupInterval = null;
 let globalCleanupInterval = null;
 let statsBroadcastInterval = null;
@@ -649,11 +662,11 @@ function startServer() {
 
     rateLimitCleanupInterval = startCleanupInterval();
     otpCleanupInterval = startOtpCleanup();
-    offlineMessagesCleanupInterval = startOfflineMessagesCleanup();
     socketRateLimitCleanupInterval = startSocketRateLimitCleanup();
+    // Cleanup status entries older than 27 hours (decompose after 27h)
     statusCleanupInterval = trackInterval(setInterval(async () => {
       try {
-        const expirationDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const expirationDate = new Date(Date.now() - 27 * 60 * 60 * 1000);
         const result = await clearExpiredStatuses(expirationDate.toISOString());
         if (result > 0) {
           Logger.info('status_cleanup', `Cleared status for ${result} users`);
@@ -838,10 +851,6 @@ async function stopServer() {
       clearTrackedInterval(otpCleanupInterval);
       otpCleanupInterval = null;
     }
-    if (offlineMessagesCleanupInterval) {
-      clearTrackedInterval(offlineMessagesCleanupInterval);
-      offlineMessagesCleanupInterval = null;
-    }
     if (socketRateLimitCleanupInterval) {
       clearTrackedInterval(socketRateLimitCleanupInterval);
       socketRateLimitCleanupInterval = null;
@@ -941,9 +950,10 @@ function getSpaceStatus(space) {
   let currentListeners = 0;
   let currentSpeakers = 0;
   for (const participant of space.participants || []) {
-    if (participant.role === 'Speaker') {
+    const role = String(participant.role || '').trim().toLowerCase();
+    if (role == 'speaker' || role == 'onstage') {
       currentSpeakers += 1;
-    } else if (participant.role === 'Listener') {
+    } else if (role == 'listener') {
       currentListeners += 1;
     }
   }
@@ -2242,7 +2252,10 @@ app.get('/friends/list', asyncHandler(async (req, res) => {
 
   try {
     const friendIds = await listFriends(userId);
-    const friends = await getUsersByIds(friendIds);
+    const [currentUser, friends] = await Promise.all([
+      getUserById(userId),
+      getUsersByIds(friendIds),
+    ]);
     const userRecords = friends.map((friend) => {
       const profile = buildCompleteUserProfile(friend);
       return {
@@ -2255,7 +2268,7 @@ app.get('/friends/list', asyncHandler(async (req, res) => {
     return sendSuccess(res, {
       friends: userRecords,
       count: userRecords.length,
-      currentUser: buildCompleteUserProfile(await getUserById(userId)),
+      currentUser: buildCompleteUserProfile(currentUser),
     }, 'Friends list retrieved');
   } catch (err) {
     Logger.error('friends/list', 'Error retrieving friends list', err.message);
@@ -2280,24 +2293,32 @@ app.get('/friends/requests/incoming', asyncHandler(async (req, res) => {
   }
 
   try {
-    const requests = await queryFriendRequestsForUser(userId, 'incoming');
-    
-    // Fetch sender profiles for display
-    const enrichedRequests = await Promise.all(
-      requests.map(async (req) => {
-        const sender = await getUserById(req.userId);
-        return buildFriendRequestPayload({
-          ...req,
-          sender: sender ? buildFriendCompleteUserProfile(sender) : null,
-          receiver: buildFriendCompleteUserProfile(await getUserById(userId)),
-        });
-      })
+    const [requests, currentUser] = await Promise.all([
+      queryFriendRequestsForUser(userId, 'incoming'),
+      getUserById(userId),
+    ]);
+
+    const senderProfiles = await getUsersByIds(
+      requests.map((req) => req.userId).filter(Boolean),
     );
+
+    const senderProfileMap = new Map(
+      senderProfiles.map((profile) => [String(profile.userId), profile]),
+    );
+
+    const enrichedRequests = requests.map((req) => {
+      const sender = senderProfileMap.get(String(req.userId));
+      return buildFriendRequestPayload({
+        ...req,
+        sender: sender ? buildFriendCompleteUserProfile(sender) : null,
+        receiver: currentUser ? buildFriendCompleteUserProfile(currentUser) : null,
+      });
+    });
 
     return sendSuccess(res, {
       requests: enrichedRequests,
       count: enrichedRequests.length,
-      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      currentUser: currentUser ? buildFriendCompleteUserProfile(currentUser) : null,
     }, 'Incoming friend requests retrieved');
   } catch (err) {
     Logger.error('friends/requests/incoming', 'Error retrieving incoming requests', err.message);
@@ -2322,25 +2343,34 @@ app.get('/friends/requests/outgoing', asyncHandler(async (req, res) => {
   }
 
   try {
-    const requests = await queryFriendRequestsForUser(userId, 'outgoing');
+    const [requests, currentUser] = await Promise.all([
+      queryFriendRequestsForUser(userId, 'outgoing'),
+      getUserById(userId),
+    ]);
 
-    // Fetch recipient profiles for display
-    const enrichedRequests = await Promise.all(
-      requests.map(async (req) => {
-        const recipient = await getUserById(req.targetUserId || req.receiverId || req.recipientId || req.targetUserId);
-        return buildFriendRequestPayload({
-          ...req,
-          recipient: recipient ? buildFriendCompleteUserProfile(recipient) : null,
-          receiver: recipient ? buildFriendCompleteUserProfile(recipient) : null,
-          sender: buildFriendCompleteUserProfile(await getUserById(userId)),
-        });
-      })
+    const recipientProfiles = await getUsersByIds(
+      requests.map((req) => req.targetUserId || req.receiverId || req.recipientId || req.targetUserId).filter(Boolean),
     );
+
+    const recipientProfileMap = new Map(
+      recipientProfiles.map((profile) => [String(profile.userId), profile]),
+    );
+
+    const enrichedRequests = requests.map((req) => {
+      const recipientId = req.targetUserId || req.receiverId || req.recipientId || req.targetUserId;
+      const recipient = recipientProfileMap.get(String(recipientId));
+      return buildFriendRequestPayload({
+        ...req,
+        recipient: recipient ? buildFriendCompleteUserProfile(recipient) : null,
+        receiver: recipient ? buildFriendCompleteUserProfile(recipient) : null,
+        sender: currentUser ? buildFriendCompleteUserProfile(currentUser) : null,
+      });
+    });
 
     return sendSuccess(res, {
       requests: enrichedRequests,
       count: enrichedRequests.length,
-      currentUser: buildFriendCompleteUserProfile(await getUserById(userId)),
+      currentUser: currentUser ? buildFriendCompleteUserProfile(currentUser) : null,
     }, 'Outgoing friend requests retrieved');
   } catch (err) {
     Logger.error('friends/requests/outgoing', 'Error retrieving outgoing requests', err.message);
@@ -2558,31 +2588,38 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const normalizedCountry = normalizeStringInput(country);
     if (normalizedCountry) updateData.country = normalizedCountry;
 
-    if (hasStatusNote) {
+    if (hasStatusNote || hasStatus) {
+      // Normalize incoming status input and append to the nested `status.statusNote` history.
       const sourceStatusNote = rawStatusNote && typeof rawStatusNote === 'object'
         ? rawStatusNote
         : inlineStatusNote || nestedStatusNote;
-      const normalizedStatusNote = {
-        note: normalizeStringInput(sourceStatusNote.note, 150),
-        color: normalizeStringInput(sourceStatusNote.color, 50),
+
+      const incomingNote = hasStatusNote
+        ? normalizeStringInput(sourceStatusNote.note, 150)
+        : normalizeStringInput(status, 150);
+      const incomingColor = hasStatusNote
+        ? normalizeStringInput(sourceStatusNote.color, 50)
+        : null;
+
+      const nowIso = new Date().toISOString();
+      const newEntry = { note: incomingNote || null, color: incomingColor || null, createdAt: nowIso };
+      const existingStatusNotes = Array.isArray(existingUser.status?.statusNote)
+        ? existingUser.status.statusNote.slice()
+        : [];
+      const existingMedia = Array.isArray(existingUser.status?.statusMedia)
+        ? existingUser.status.statusMedia.slice()
+        : [];
+      const incomingMedia = Array.isArray(status?.statusMedia) ? status.statusMedia : [];
+      const mergedMedia = incomingMedia.length ? incomingMedia : existingMedia;
+      const mergedStatusNotes = existingStatusNotes.concat(newEntry);
+      const mergedStatusPayload = {
+        statusNote: mergedStatusNotes,
+        ...(mergedMedia.length ? { statusMedia: mergedMedia } : {}),
       };
-      updateData.statusNote = {};
-      if (normalizedStatusNote.note) {
-        updateData.statusNote.note = normalizedStatusNote.note;
-        updateData.status = normalizedStatusNote.note;
-      }
-      if (normalizedStatusNote.color) {
-        updateData.statusNote.color = normalizedStatusNote.color;
-      }
-      if (existingUser.status !== normalizedStatusNote.note) {
-        updateData.statusUpdatedAt = new Date();
-      }
-    } else if (hasStatus) {
-      const newStatus = normalizeStringInput(status, 150);
-      updateData.status = newStatus;
-      if (existingUser.status !== newStatus) {
-        updateData.statusUpdatedAt = new Date();
-      }
+
+      updateData.status = mergedStatusPayload;
+      updateData.statusUpdatedAt = new Date();
+      updateData.updatedAt = new Date();
     }
 
     if (hasBio) {
@@ -2884,7 +2921,6 @@ async function deleteUserAccount(userId, requestContext = {}) {
   userSockets.delete(normalizedUserId);
   userGenderPreferences.delete(normalizedUserId);
   socketQueues.delete(userSocketId);
-  offlineMessages.delete(normalizedUserId);
 
   Logger.info('user/delete', '✅ User account completely deleted', {
     userId: normalizedUserId,
@@ -3032,11 +3068,6 @@ const userSockets = new Map(); // userId -> socketId
 const socketMetadata = new Map(); // socketId -> { userId, userName, joinedAt }
 const socketQueues = new Map(); // socket.id -> 'video' | 'chat' (track which queue user is in)
 const rateLimitMap = new Map(); // socketId -> { count, resetTime } for abuse prevention
-// ✅ NEW: Store offline messages to deliver when user comes online
-let offlineMessages = new Map(); // userId -> [{ payload: messagePayload, ts: number }]
-// TTL for offline messages (default 7 days) - can be adjusted via env
-const OFFLINE_MESSAGE_TTL_MS = (Number(process.env.OFFLINE_MESSAGE_TTL_DAYS) || 7) * 24 * 60 * 60 * 1000;
-
 // ========== FRIEND SYSTEM CACHING & NOTIFICATIONS ==========
 // User profile cache to avoid repeated DB lookups
 const userProfileCache = new Map(); // userId -> { profile, cachedAt }
@@ -3328,30 +3359,6 @@ function startFriendSystemCleanup() {
       Logger.warn('friend_cleanup', 'Error during friend system cleanup', { error: e?.message });
     }
   }, 10 * 60 * 1000); // run every 10 minutes
-}
-
-// Periodic cleanup for offlineMessages to avoid unbounded memory growth
-function startOfflineMessagesCleanup() {
-  return setInterval(() => {
-    try {
-      const now = Date.now();
-      let removedCount = 0;
-      for (const [userId, list] of offlineMessages.entries()) {
-        const filtered = list.filter(item => now - item.ts <= OFFLINE_MESSAGE_TTL_MS);
-        removedCount += (list.length - filtered.length);
-        if (filtered.length > 0) {
-          offlineMessages.set(userId, filtered);
-        } else {
-          offlineMessages.delete(userId);
-        }
-      }
-      if (removedCount > 0) {
-        Logger.info('offlineMessages', 'Cleaned expired offline messages', { removedCount });
-      }
-    } catch (e) {
-      Logger.warn('offlineMessages', 'Error during offline messages cleanup', { err: e && e.message });
-    }
-  }, 60 * 60 * 1000); // run hourly
 }
 
 function startSocketRateLimitCleanup() {
@@ -4045,25 +4052,6 @@ io.on('connection', (socket) => {
       socket.data.userId = normalizedUserId;
       socket.data.userName = userData.userName;
       userSockets.set(normalizedUserId, socket.id);
-
-      // ✅ NEW: Deliver any offline messages when user comes online (respect TTL)
-      if (offlineMessages && offlineMessages.has(normalizedUserId)) {
-        const messages = offlineMessages.get(normalizedUserId) || [];
-        const now = Date.now();
-        const validMessages = messages.filter(item => now - item.ts <= OFFLINE_MESSAGE_TTL_MS);
-        Logger.info('register_user', `Delivering ${validMessages.length} offline messages to ${normalizedUserId}`, {
-          userId: normalizedUserId,
-          messageCount: validMessages.length,
-        });
-
-        // Send valid offline messages to the newly connected socket
-        validMessages.forEach(item => {
-          try { socket.emit('direct_message', item.payload); } catch (e) {}
-        });
-
-        // Remove delivered messages
-        offlineMessages.delete(normalizedUserId);
-      }
 
       // Simple logging - no sensitive data stored
       Logger.info('register_user', '✅ User registered', {
@@ -5081,15 +5069,30 @@ io.on('connection', (socket) => {
   socket.on('approve_speak_request', (data) => {
     try {
       const spaceId = data && data.spaceId ? String(data.spaceId) : null;
-      const userId = data && data.userId ? String(data.userId) : null;
+      let userId = data && data.userId ? String(data.userId) : null;
       const userName = data && data.userName ? String(data.userName) : null;
+      const assignedRole = data && data.assignedRole ? data.assignedRole : 'OnStage';
       if (!spaceId || (!userId && !userName)) return;
 
       const space = activeVoiceSpaces.get(spaceId);
-      if (space && userId) {
-        const participant = space.participants.find((p) => p.userId === userId);
+      if (space) {
+        let participant = null;
+        if (userId) {
+          participant = space.participants.find((p) => p.userId === userId);
+        }
+        if (!participant && userName) {
+          const normalizedUserName = userName.trim().toLowerCase();
+          participant = space.participants.find((p) => {
+            const candidateName = (p.userName || p.name || p.displayName || '').toString().trim().toLowerCase();
+            return candidateName === normalizedUserName;
+          });
+          if (participant) {
+            userId = participant.userId;
+          }
+        }
+
         if (participant) {
-          participant.role = data.assignedRole || 'OnStage';
+          participant.role = assignedRole;
           emitSpaceUpdated(space);
           broadcastActiveSpaces();
         }
@@ -5099,9 +5102,10 @@ io.on('connection', (socket) => {
       let targetSocketId = null;
       if (userId) targetSocketId = userSockets.get(userId);
       if (!targetSocketId && userName) {
+        const normalizedUserName = userName.trim().toLowerCase();
         for (const [uId, sockId] of userSockets.entries()) {
           const meta = socketMetadata.get(sockId);
-          if (meta && meta.userName === userName) {
+          if (meta && meta.userName && meta.userName.trim().toLowerCase() === normalizedUserName) {
             targetSocketId = sockId;
             break;
           }
@@ -5113,11 +5117,12 @@ io.on('connection', (socket) => {
           spaceId,
           userName,
           userId,
-          assignedRole: data.assignedRole || 'OnStage',
+          assignedRole,
         });
         Logger.info('approve_speak_request', `Approved ${userName || userId} to speak`, {
           spaceId,
           userId,
+          assignedRole,
         });
       }
     } catch (err) {
@@ -5473,21 +5478,11 @@ io.on('connection', (socket) => {
           recipientSocketId,
         });
       } else {
-        // ✅ NEW: Recipient is offline - store message for later delivery
-        Logger.info('send_direct_message', 'Recipient offline, storing message for later', {
-          senderId: senderId,
-          recipientId: recipientId,
+        // Recipient is offline: do not persist direct messages on the server.
+        Logger.info('send_direct_message', 'Recipient offline; direct message will not be stored by backend', {
+          senderId,
+          recipientId,
         });
-        
-        // Store in offlineMessages map for delivery when recipient comes online
-        if (!offlineMessages) {
-          offlineMessages = new Map();
-        }
-        const key = recipientId;
-        if (!offlineMessages.has(key)) {
-          offlineMessages.set(key, []);
-        }
-        offlineMessages.get(key).push({ payload: messagePayload, ts: Date.now() });
       }
     } catch (err) {
       Logger.error('send_direct_message', 'Error sending direct message', err && err.message);
@@ -5800,7 +5795,10 @@ io.on('connection', (socket) => {
       // Determine role: FREE rooms auto-assign open speaker slots, otherwise listener by default.
       let assignedRole = 'Listener';
       const normalizedRoomType = String(space.roomType || 'FREE').toUpperCase();
-      const currentSpeakers = space.participants.filter((p) => p.role === 'Speaker').length;
+      const currentSpeakers = space.participants.filter((p) => {
+        const role = String(p.role || '').trim().toLowerCase();
+        return role === 'speaker' || role === 'onstage';
+      }).length;
 
       if (normalizedRoomType === 'FREE') {
         if (currentSpeakers < space.speakerLimit) {
