@@ -553,6 +553,9 @@ function validateProfileUpdate(req, res, next) {
     if (typeof hasProfileChanged === 'boolean') {
       sanitizedBody.hasProfileChanged = hasProfileChanged;
     }
+    if (typeof req.body.clearStatusNote === 'boolean') {
+      sanitizedBody.clearStatusNote = req.body.clearStatusNote;
+    }
 
     req.body = sanitizedBody;
 
