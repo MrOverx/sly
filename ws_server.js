@@ -97,6 +97,18 @@ function normalizeIsoTimestamp(value) {
   return null;
 }
 
+function filterRecentStatusNotes(statusNotes, hours = 24) {
+  if (!Array.isArray(statusNotes)) return [];
+  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+  return statusNotes.filter((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    if (!entry.createdAt) return false;
+    const createdAt = new Date(entry.createdAt);
+    if (Number.isNaN(createdAt.getTime())) return false;
+    return createdAt >= cutoff;
+  });
+}
+
 function buildCompleteUserProfile(user) {
   if (!user) return null;
   const displayName = user.userName || user.name || user.displayName || 'User';
@@ -118,9 +130,7 @@ function buildCompleteUserProfile(user) {
   const statusObject = user.status && typeof user.status === 'object' && !Array.isArray(user.status)
     ? user.status
     : null;
-  const statusNoteEntries = Array.isArray(statusObject?.statusNote)
-    ? statusObject.statusNote
-    : [];
+  const statusNoteEntries = filterRecentStatusNotes(Array.isArray(statusObject?.statusNote) ? statusObject.statusNote : []);
   const statusMediaEntries = Array.isArray(statusObject?.statusMedia)
     ? statusObject.statusMedia
     : (Array.isArray(user.statusMedia) ? user.statusMedia : []);
@@ -636,10 +646,10 @@ function startServer() {
     rateLimitCleanupInterval = startCleanupInterval();
     otpCleanupInterval = startOtpCleanup();
     socketRateLimitCleanupInterval = startSocketRateLimitCleanup();
-    // Cleanup status entries older than 27 hours (decompose after 27h)
+    // Cleanup status entries older than 24 hours (decompose after 24h)
     statusCleanupInterval = trackInterval(setInterval(async () => {
       try {
-        const expirationDate = new Date(Date.now() - 27 * 60 * 60 * 1000);
+        const expirationDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const result = await clearExpiredStatuses(expirationDate.toISOString());
         if (result > 0) {
           Logger.info('status_cleanup', `Cleared status for ${result} users`);
@@ -2578,7 +2588,13 @@ app.post(['/user/:userId/update', '/users/:userId/update'], validateProfileUpdat
     const normalizedCountry = normalizeStringInput(country);
     if (normalizedCountry) updateData.country = normalizedCountry;
 
-    if (hasStatusNote || hasStatus) {
+    const clearStatusNote = req.body.clearStatusNote === true;
+    if (clearStatusNote) {
+      updateData.status = { statusNote: [], statusMedia: [] };
+      updateData.statusUpdatedAt = new Date();
+    }
+
+    if (!clearStatusNote && (hasStatusNote || hasStatus)) {
       // Normalize incoming status input and append to the nested `status.statusNote` history.
       let incomingStatusNotes = [];
       let incomingStatusMedia = [];
@@ -6749,4 +6765,4 @@ process.on('unhandledRejection', (reason, promise) => {
   Logger.error('unhandledRejection', 'Unhandled rejection', String(reason));
 });
 
-module.exports = { startServer, stopServer, getPort };
+module.exports = { startServer, stopServer, getPort, app };

@@ -1,197 +1,88 @@
-﻿[
+[
   {
-    "PK": "USER#user_1001",
+    "PK": "USER#userA",
     "SK": "METADATA",
     "itemType": "USER",
-    "userId": "user_1001",
-    "userName": "Ava Carter",
-    "email": "ava@example.com",
-    "normalizedEmail": "ava@example.com",
-    "emailVerified": true,
-    "emailVerifiedAt": "2026-07-16T08:00:00.000Z",
-    "authType": "LOCAL",
-    "isGuest": false,
-    "avatarColor": "#4A90E2",
-    "avatarLetter": "A",
-    "useColorProfile": true,
-    "gender": "female",
-    "birthDate": "1998-05-14T00:00:00.000Z",
-    "country": "US",
-    "profileImageUrl": "https://images.unsplash.com/photo-1494790108377-be9c29b29330",
-    "profileImagePath": null,
-    "pictureName": "ava_profile.jpg",
-    "bio": "Love photography, coffee, and spontaneous road trips.",
-    "interests": ["travel", "music", "photography", "coding"],
-    "status": {
-      "statusNote": [
-        {
-          "note": "Exploring new places 🌍",
-          "color": "#FF6B6B",
-          "createdAt": "2026-07-16T10:30:00.000Z"
-        },
-        {
-          "note": "Coffee break ☕",
-          "color": "#FFA726",
-          "createdAt": "2026-07-16T09:00:00.000Z"
-        }
-      ],
-      "statusMedia": [
-        {
-          "caption": "Sunset at the beach",
-          "updatedAt": "2026-07-16T11:00:00.000Z",
-          "media": [
-            {
-              "type": "image",
-              "url": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e"
-            }
-          ]
-        }
-      ]
-    },
-    "xp": {
-      "base": 10,
-      "daily": 25,
-      "streak": 4
-    },
-    "likedUserIds": [],
-    "lastDailyXpAwardedAt": "2026-07-16T09:00:00.000Z",
-    "hasProfileChanged": true,
-    "isOnline": true,
-    "isFriend": false,
-    "isActive": true,
-    "friends": [],
-    "friendRequests": [],
-    "passwordHash": null,
-    "createdAt": "2026-07-15T10:00:00.000Z",
-    "updatedAt": "2026-07-16T11:30:00.000Z",
-    "lastLogin": "2026-07-16T11:30:00.000Z"
-  },
-  {
-    "PK": "USER#user_1002",
-    "SK": "METADATA",
-    "itemType": "USER",
-    "userId": "user_1002",
-    "userName": "John Smith",
-    "email": "john@example.com",
-    "normalizedEmail": "john@example.com",
-    "emailVerified": true,
-    "emailVerifiedAt": "2026-07-10T12:00:00.000Z",
+    "userId": "userA",
+    "userName": "User A",
+    "email": "usera@example.com",
     "authType": "MAIL",
     "isGuest": false,
-    "avatarColor": "#E24A90",
-    "avatarLetter": "J",
-    "useColorProfile": true,
-    "gender": "male",
-    "birthDate": "1995-03-22T00:00:00.000Z",
-    "country": "UK",
-    "profileImageUrl": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d",
-    "profileImagePath": null,
-    "pictureName": "john_avatar.png",
-    "bio": "Tech enthusiast and gamer.",
-    "interests": ["gaming", "tech", "movies", "sports"],
+    "gender": "other",
+    "country": null,
     "status": {
-      "statusNote": [
-        {
-          "note": "Playing video games 🎮",
-          "color": "#42A5F5",
-          "createdAt": "2026-07-16T08:45:00.000Z"
-        }
-      ],
+      "statusNote": [],
       "statusMedia": []
     },
-    "xp": {
-      "base": 10,
-      "daily": 15,
-      "streak": 2
-    },
-    "likedUserIds": ["user_1001"],
-    "lastDailyXpAwardedAt": "2026-07-16T08:00:00.000Z",
-    "hasProfileChanged": true,
+    "bio": null,
+    "interests": [],
+    "birthDate": null,
+    "avatarColor": "#128C7E",
+    "avatarLetter": "U",
+    "useColorProfile": true,
+    "hasProfileChanged": false,
+    "isFriend": false,
     "isOnline": false,
-    "isFriend": true,
-    "isActive": true,
-    "friends": [
-      {
-        "friendId": "user_1001",
-        "addedAt": "2026-07-14T10:00:00.000Z"
-      }
-    ],
+    "profileImageUrl": null,
+    "profileImagePath": null,
+    "pictureName": null,
     "friendRequests": [],
     "passwordHash": null,
-    "createdAt": "2026-07-01T14:20:00.000Z",
-    "updatedAt": "2026-07-16T08:45:00.000Z",
-    "lastLogin": "2026-07-16T08:45:00.000Z"
+    "emailVerified": false,
+    "emailVerifiedAt": null,
+    "isActive": true,
+    "xp": {},
+    "likedUserIds": [],
+    "lastDailyXpAwardedAt": null,
+    "friends": [],
+    "createdAt": "2026-07-17T01:59:25.757Z",
+    "updatedAt": "2026-07-17T01:59:25.820Z",
+    "lastLogin": "2026-07-17T01:59:25.757Z",
+    "normalizedEmail": "usera@example.com",
+    "emailLower": "usera@example.com",
+    "friendIds": []
   },
   {
-    "PK": "USER#user_1003",
+    "PK": "USER#userB",
     "SK": "METADATA",
     "itemType": "USER",
-    "userId": "user_1003",
-    "userName": "Sarah Designer",
-    "email": "sarah@example.com",
-    "normalizedEmail": "sarah@example.com",
-    "emailVerified": true,
-    "emailVerifiedAt": "2026-07-12T09:00:00.000Z",
-    "authType": "LOCAL",
+    "userId": "userB",
+    "userName": "User B",
+    "email": "userb@example.com",
+    "authType": "MAIL",
     "isGuest": false,
-    "avatarColor": "#AB47BC",
-    "avatarLetter": "S",
-    "useColorProfile": true,
-    "gender": "female",
-    "birthDate": "2000-08-17T00:00:00.000Z",
-    "country": "CA",
-    "profileImageUrl": "https://images.unsplash.com/photo-1438761681033-6461ffad8d80",
-    "profileImagePath": null,
-    "pictureName": "sarah_pic.jpg",
-    "bio": "UI/UX Designer | Passionate about creative design.",
-    "interests": ["design", "art", "fashion", "travel"],
+    "gender": "other",
+    "country": null,
     "status": {
-      "statusNote": [
-        {
-          "note": "Working on new project 💻",
-          "color": "#EC407A",
-          "createdAt": "2026-07-16T11:15:00.000Z"
-        },
-        {
-          "note": "Available for design work ✨",
-          "color": "#7E57C2",
-          "createdAt": "2026-07-16T07:30:00.000Z"
-        }
-      ],
-      "statusMedia": [
-        {
-          "caption": "Design inspiration",
-          "updatedAt": "2026-07-16T10:00:00.000Z",
-          "media": [
-            {
-              "type": "image",
-              "url": "https://images.unsplash.com/photo-1561070791-2526d30994b5"
-            }
-          ]
-        }
-      ]
+      "statusNote": [],
+      "statusMedia": []
     },
-    "xp": {
-      "base": 10,
-      "daily": 35,
-      "streak": 7
-    },
-    "likedUserIds": ["user_1001", "user_1002"],
-    "lastDailyXpAwardedAt": "2026-07-16T10:00:00.000Z",
+    "bio": null,
+    "interests": [],
+    "birthDate": null,
+    "avatarColor": "#128C7E",
+    "avatarLetter": "U",
+    "useColorProfile": true,
     "hasProfileChanged": false,
-    "isOnline": true,
     "isFriend": false,
-    "isActive": true,
-    "friends": [
-      {
-        "friendId": "user_1002",
-        "addedAt": "2026-07-08T15:30:00.000Z"
-      }
-    ],
+    "isOnline": false,
+    "profileImageUrl": null,
+    "profileImagePath": null,
+    "pictureName": null,
     "friendRequests": [],
     "passwordHash": null,
-    "createdAt": "2026-06-28T16:45:00.000Z",
-    "updatedAt": "2026-07-16T11:15:00.000Z",
-    "lastLogin": "2026-07-16T11:15:00.000Z"
+    "emailVerified": false,
+    "emailVerifiedAt": null,
+    "isActive": true,
+    "xp": {},
+    "likedUserIds": [],
+    "lastDailyXpAwardedAt": null,
+    "friends": [],
+    "createdAt": "2026-07-17T01:59:25.760Z",
+    "updatedAt": "2026-07-17T01:59:25.826Z",
+    "lastLogin": "2026-07-17T01:59:25.760Z",
+    "normalizedEmail": "userb@example.com",
+    "emailLower": "userb@example.com",
+    "friendIds": []
   }
 ]
