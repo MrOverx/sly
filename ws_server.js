@@ -969,6 +969,12 @@ function broadcastActiveSpaces() {
 function emitSpaceUpdated(space) {
   const payload = {
     spaceId: space.spaceId,
+    roomType: space.roomType || 'FREE',
+    speakerLimit: space.speakerLimit || 5,
+    hostId: space.hostId,
+    hostName: space.hostName,
+    spaceName: space.name,
+    description: space.description,
     participants: space.participants,
     ...getSpaceStatus(space),
   };
@@ -980,6 +986,7 @@ function emitSpaceUpdated(space) {
   } catch (err) {
     Logger.warn('emitSpaceUpdated', 'Could not inspect room membership', err && err.message);
   }
+  return payload;
 }
 
 function getSafeProfileImageReference(value) {
@@ -6767,4 +6774,4 @@ process.on('unhandledRejection', (reason, promise) => {
   Logger.error('unhandledRejection', 'Unhandled rejection', String(reason));
 });
 
-module.exports = { startServer, stopServer, getPort, app };
+module.exports = { startServer, stopServer, getPort, app, emitSpaceUpdated };
