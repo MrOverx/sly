@@ -4202,6 +4202,7 @@ io.on('connection', (socket) => {
         userName: data?.userName || socket.data?.userName || null,
         isOnline,
         timestamp: new Date().toISOString(),
+        lastSeenAt: isOnline ? null : new Date().toISOString(),
       };
 
       Logger.info('set_user_online_status', 'Received online status update', {
@@ -6050,6 +6051,7 @@ io.on('connection', (socket) => {
             userName: userData?.userName || null,
             isOnline: false,
             timestamp: new Date().toISOString(),
+            lastSeenAt: new Date().toISOString(),
           };
           io.emit('user_online_status', offlinePayload);
 
