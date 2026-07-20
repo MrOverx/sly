@@ -5114,27 +5114,16 @@ io.on('connection', (socket) => {
       const space = activeVoiceSpaces.get(spaceId);
       if (!space) return;
 
-      const roomType = (space.roomType || space.type || data.roomType || '').toString().trim().toUpperCase();
-      const isManagedSpeakerRoom = roomType === 'VALUABLE' || roomType === 'PRO';
       const requesterUserId = data && data.userId ? String(data.userId) : null;
       const requesterName = data && data.userName ? String(data.userName) : 'Guest';
+      const requester = requesterUserId
+        ? space.participants.find((p) => p.userId === requesterUserId)
+        : null;
 
-      if (isManagedSpeakerRoom && requesterUserId) {
-        const participant = space.participants.find((p) => p.userId === requesterUserId);
-        if (participant) {
-          participant.role = 'OnStage';
-        }
-        emitSpaceUpdated(space);
-        broadcastActiveSpaces();
-
-        const requesterSocketId = userSockets.get(requesterUserId);
-        if (requesterSocketId) {
-          io.to(requesterSocketId).emit('speak_request_approved', {
-            spaceId,
-            userName: requesterName,
-            userId: requesterUserId,
-            assignedRole: 'OnStage',
-          });
+      if (requester) {
+        const role = String(requester.role || '').trim().toLowerCase();
+        if (role === 'host' || role === 'speaker' || role === 'onstage') {
+          return;
         }
       }
 
@@ -5161,6 +5150,20 @@ io.on('connection', (socket) => {
 
       const space = activeVoiceSpaces.get(spaceId);
       if (space) {
+        const senderMeta = socketMetadata.get(socket.id) || {};
+        const senderUserId = senderMeta.userId || (socket.data && socket.data.userId);
+        const senderParticipant = senderUserId
+          ? space.participants.find((p) => p.userId === senderUserId)
+          : null;
+        const normalizedRoomType = String(space.roomType || 'FREE').toUpperCase();
+        const senderRole = senderParticipant
+          ? String(senderParticipant.role || '').trim().toLowerCase()
+          : null;
+        const canApprove = senderRole === 'host' ||
+          (normalizedRoomType === 'PRO' && (senderRole === 'speaker' || senderRole === 'onstage'));
+
+        if (!canApprove) return;
+
         let participant = null;
         if (userId) {
           participant = space.participants.find((p) => p.userId === userId);
@@ -5221,6 +5224,23 @@ io.on('connection', (socket) => {
       const userName = data && data.userName ? String(data.userName) : null;
       if (!spaceId || !userName) return;
 
+      const space = activeVoiceSpaces.get(spaceId);
+      if (!space) return;
+
+      const senderMeta = socketMetadata.get(socket.id) || {};
+      const senderUserId = senderMeta.userId || (socket.data && socket.data.userId);
+      const senderParticipant = senderUserId
+        ? space.participants.find((p) => p.userId === senderUserId)
+        : null;
+      const normalizedRoomType = String(space.roomType || 'FREE').toUpperCase();
+      const senderRole = senderParticipant
+        ? String(senderParticipant.role || '').trim().toLowerCase()
+        : null;
+      const canDecline = senderRole === 'host' ||
+        (normalizedRoomType === 'PRO' && (senderRole === 'speaker' || senderRole === 'onstage'));
+
+      if (!canDecline) return;
+
       // Find the user by name and notify them
       for (const [userId, sockId] of userSockets.entries()) {
         const meta = socketMetadata.get(sockId);
@@ -5266,14 +5286,28 @@ io.on('connection', (socket) => {
       if (!spaceId || !userId) return;
 
       const space = activeVoiceSpaces.get(spaceId);
-      if (space) {
-        const participant = space.participants.find((p) => p.userId === userId);
-        if (participant) {
-          participant.role = 'Speaker';
-          emitSpaceUpdated(space);
-          broadcastActiveSpaces();
-          Logger.info('promote_to_speaker', `Promoted user ${userId} to speaker in space ${spaceId}`);
-        }
+      if (!space) return;
+
+      const senderMeta = socketMetadata.get(socket.id) || {};
+      const senderUserId = senderMeta.userId || (socket.data && socket.data.userId);
+      const senderParticipant = senderUserId
+        ? space.participants.find((p) => p.userId === senderUserId)
+        : null;
+      const normalizedRoomType = String(space.roomType || 'FREE').toUpperCase();
+      const senderRole = senderParticipant
+        ? String(senderParticipant.role || '').trim().toLowerCase()
+        : null;
+      const canPromote = senderRole === 'host' ||
+        (normalizedRoomType === 'PRO' && (senderRole === 'speaker' || senderRole === 'onstage'));
+
+      if (!canPromote) return;
+
+      const participant = space.participants.find((p) => p.userId === userId);
+      if (participant) {
+        participant.role = 'Speaker';
+        emitSpaceUpdated(space);
+        broadcastActiveSpaces();
+        Logger.info('promote_to_speaker', `Promoted user ${userId} to speaker in space ${spaceId}`);
       }
     } catch (err) {
       Logger.error('promote_to_speaker', 'Error promoting user to speaker', err && err.message);
