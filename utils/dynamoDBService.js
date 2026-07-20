@@ -423,6 +423,9 @@ function buildUserItem(user) {
         }
       : null;
     statusText = statusNote?.note || (typeof user.status === 'string' ? String(user.status).trim() : null) || null;
+    if (statusNote && !statusUpdatedAt) {
+      statusUpdatedAt = now;
+    }
   }
 
   const nestedStatus = {};
