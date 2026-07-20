@@ -1161,17 +1161,35 @@ function closeSpaceAsHost(spaceId, reason = 'host_disconnected') {
   const space = activeVoiceSpaces.get(spaceId);
   if (!space) return;
 
+  const closePayload = {
+    spaceId,
+    reason,
+    closedByUserId: space.hostId,
+    closedBy: space.hostName,
+  };
+
   for (const participant of space.participants) {
     const participantSocketId = userSockets.get(participant.userId);
     if (participantSocketId) {
-      io.to(participantSocketId).emit('space_closed_by_host', { spaceId, reason });
+      io.to(participantSocketId).emit('space_closed_by_host', closePayload);
       io.sockets.sockets.get(participantSocketId)?.leave(`space:${spaceId}`);
     }
+    cancelVoiceSpaceDisconnectCleanup(participant.userId);
     userToSpaceMap.delete(participant.userId);
   }
 
+  const room = io.sockets.adapter.rooms.get(`space:${spaceId}`);
+  if (room) {
+    for (const socketId of room) {
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) {
+        sock.leave(`space:${spaceId}`);
+      }
+    }
+  }
+
   activeVoiceSpaces.delete(spaceId);
-  io.emit('space_closed', { spaceId });
+  io.emit('space_closed', closePayload);
   Logger.info('space', `Closed space ${spaceId} because host disconnected`, { reason });
   broadcastActiveSpaces();
 }
