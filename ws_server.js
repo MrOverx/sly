@@ -5113,12 +5113,37 @@ io.on('connection', (socket) => {
       if (!spaceId) return;
       const space = activeVoiceSpaces.get(spaceId);
       if (!space) return;
+
+      const roomType = (space.roomType || space.type || data.roomType || '').toString().trim().toUpperCase();
+      const isManagedSpeakerRoom = roomType === 'VALUABLE' || roomType === 'PRO';
+      const requesterUserId = data && data.userId ? String(data.userId) : null;
+      const requesterName = data && data.userName ? String(data.userName) : 'Guest';
+
+      if (isManagedSpeakerRoom && requesterUserId) {
+        const participant = space.participants.find((p) => p.userId === requesterUserId);
+        if (participant) {
+          participant.role = 'OnStage';
+        }
+        emitSpaceUpdated(space);
+        broadcastActiveSpaces();
+
+        const requesterSocketId = userSockets.get(requesterUserId);
+        if (requesterSocketId) {
+          io.to(requesterSocketId).emit('speak_request_approved', {
+            spaceId,
+            userName: requesterName,
+            userId: requesterUserId,
+            assignedRole: 'OnStage',
+          });
+        }
+      }
+
       const hostSocketId = userSockets.get(space.hostId);
       if (hostSocketId) {
         io.to(hostSocketId).emit('speak_request', {
           spaceId,
-          userId: data.userId,
-          userName: data.userName || 'Guest',
+          userId: requesterUserId,
+          userName: requesterName,
         });
       }
     } catch (err) {
