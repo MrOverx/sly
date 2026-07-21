@@ -19,12 +19,14 @@
       padding: 24px;
     }
     .card {
-      width: min(100%, 480px);
-      background: rgba(15, 23, 42, 0.95);
+      width: min(100%, 520px);
+      background: rgba(15, 23, 42, 0.98);
       border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 16px;
-      padding: 24px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 24px 54px rgba(0, 0, 0, 0.32);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
     }
     h1 {
       margin: 0 0 8px;
@@ -54,13 +56,22 @@
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
+      align-items: center;
     }
     button {
       border: none;
-      border-radius: 10px;
-      padding: 10px 14px;
+      border-radius: 12px;
+      padding: 12px 18px;
       font-weight: 700;
       cursor: pointer;
+      transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+    }
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
     }
     .btn-primary {
       background: #38bdf8;
@@ -72,16 +83,17 @@
     }
     .status {
       margin-top: 14px;
-      padding: 12px;
-      border-radius: 10px;
-      background: #1e293b;
-      min-height: 48px;
+      padding: 16px;
+      border-radius: 14px;
+      background: #16202d;
+      min-height: 64px;
       white-space: pre-wrap;
-      line-height: 1.4;
+      line-height: 1.5;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
     }
-    .status.success { border-left: 4px solid #22c55e; color: #dcfce7; }
-    .status.error { border-left: 4px solid #ef4444; color: #fee2e2; }
-    .status.info { border-left: 4px solid #38bdf8; }
+    .status.success { border-left: 4px solid #22c55e; color: #dcfce7; background: rgba(16, 185, 129, 0.12); }
+    .status.error { border-left: 4px solid #ef4444; color: #fee2e2; background: rgba(248, 113, 113, 0.12); }
+    .status.info { border-left: 4px solid #38bdf8; color: #bfdbfe; background: rgba(56, 189, 248, 0.08); }
     .input-valid { border-color: #22c55e !important; box-shadow: 0 0 0 1px rgba(34,197,94,0.35); }
     .input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 1px rgba(239,68,68,0.35); }
     .btn-danger:disabled,
@@ -97,7 +109,7 @@
     <h1>Verify & Delete Account</h1>
     <p>Enter your email and password to verify the account before deleting it.</p>
 
-    <form id="verifyForm">
+    <form id="verifyForm" novalidate>
       <label for="email">Email</label>
       <input id="email" name="email" type="email" placeholder="Enter email" required />
 
@@ -105,17 +117,18 @@
       <input id="password" name="password" type="password" placeholder="Enter password" required />
 
       <div class="actions">
-        <button type="submit" class="btn-primary">Verify account</button>
+        <button type="submit" class="btn-primary" id="verifyBtn">Verify account</button>
       </div>
     </form>
 
-    <div class="status info" id="verifyStatus">Waiting for verification…</div>
+    <div class="status info" id="verifyStatus" aria-live="polite">Waiting for verification…</div>
 
     <hr style="margin: 20px 0; border-color: rgba(148,163,184,0.2);" />
 
     <div class="muted">This action permanently removes the user account and related records.</div>
-    <div class="actions" style="margin-top: 12px;">
+    <div class="actions" style="margin-top: 16px; justify-content: space-between; align-items: center;">
       <button type="button" class="btn-danger" id="deleteBtn" disabled>Delete account</button>
+      <span class="muted">Verify first, then delete with confirmation.</span>
     </div>
   </div>
 
@@ -123,23 +136,40 @@
     const verifyForm = document.getElementById('verifyForm');
     const verifyStatus = document.getElementById('verifyStatus');
     const deleteBtn = document.getElementById('deleteBtn');
+    const verifyBtn = document.getElementById('verifyBtn');
     const emailInput = document.getElementById('email');
     const passwordInput = document.getElementById('password');
 
     let isVerified = false;
+    let isSubmitting = false;
 
     function setStatus(message, type = 'info') {
       verifyStatus.textContent = message;
       verifyStatus.className = `status ${type}`.trim();
     }
 
+    function setLoadingState(loading) {
+      isSubmitting = loading;
+      emailInput.disabled = loading;
+      passwordInput.disabled = loading;
+      verifyBtn.disabled = loading;
+      deleteBtn.disabled = loading || !isVerified;
+      if (loading) {
+        setStatus('Please wait… contacting the server.', 'info');
+      }
+    }
+
     function setVerificationState(verified) {
       isVerified = verified;
-      deleteBtn.disabled = !verified;
+      deleteBtn.disabled = !verified || isSubmitting;
+      verifyBtn.textContent = verified ? 'Verified' : 'Verify account';
       emailInput.classList.toggle('input-valid', verified);
       passwordInput.classList.toggle('input-valid', verified);
       emailInput.classList.toggle('input-error', !verified && emailInput.value.trim());
       passwordInput.classList.toggle('input-error', !verified && passwordInput.value);
+      if (!verified) {
+        verifyBtn.textContent = 'Verify account';
+      }
     }
 
     function getErrorMessage(data) {
@@ -157,6 +187,7 @@
 
     verifyForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (isSubmitting) return;
       const email = emailInput.value.trim();
       const password = passwordInput.value;
       if (!email || !password) {
@@ -165,12 +196,13 @@
         return;
       }
 
-      setStatus('Checking account…', 'info');
+      setLoadingState(true);
       try {
         const response = await fetch('/auth/verify-account', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
+          body: JSON.stringify({ email, password }),
+          credentials: 'same-origin',
         });
 
         const data = await response.json().catch(() => ({}));
@@ -185,10 +217,13 @@
       } catch (error) {
         setVerificationState(false);
         setStatus(`Request failed: ${error.message}`, 'error');
+      } finally {
+        setLoadingState(false);
       }
     });
 
     deleteBtn.addEventListener('click', async () => {
+      if (isSubmitting) return;
       const email = emailInput.value.trim();
       const password = passwordInput.value;
       if (!email || !password) {
@@ -204,15 +239,17 @@
 
       const confirmed = window.confirm(`Delete account for ${email}? This cannot be undone.`);
       if (!confirmed) {
+        setStatus('Account deletion cancelled.', 'info');
         return;
       }
 
-      setStatus('Deleting account…', 'info');
+      setLoadingState(true);
       try {
         const response = await fetch('/auth/delete-account', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
+          body: JSON.stringify({ email, password }),
+          credentials: 'same-origin',
         });
 
         const data = await response.json().catch(() => ({}));
@@ -225,10 +262,13 @@
         setVerificationState(false);
         emailInput.value = '';
         passwordInput.value = '';
-        setStatus(`✅ ${data?.message || `Account deleted successfully for ${email}.`}`, 'success');
+        const successMessage = data?.message || `Account deleted successfully for ${email}.`;
+        setStatus(`✅ ${successMessage}`, 'success');
       } catch (error) {
         setVerificationState(false);
         setStatus(`Delete request failed: ${error.message}`, 'error');
+      } finally {
+        setLoadingState(false);
       }
     });
   </script>

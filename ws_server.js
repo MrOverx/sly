@@ -334,12 +334,43 @@ const corsOptions = {
 
 // ✅ Add JSON parsing middleware with compression
 app.use(compression()); // ✅ Gzip compression for all responses
-app.use(helmet()); // ✅ Security headers (X-Frame-Options, Content-Security-Policy, etc.)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+})); // ✅ Security headers with a CSP that allows the inline account-deletion page assets
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cors(corsOptions));
 // Parse cookies for refresh-token endpoints
 app.use(cookieParser());
+
+// Serve the account deletion verification page.
+// This page is not part of the mobile app, but can be used for browser-based admin/test flows.
+app.get('/delete-account', (req, res) => {
+  res.sendFile(path.join(__dirname, 'delete-account.html'), (err) => {
+    if (err) {
+      Logger.error('static', 'Failed to serve delete-account.html', err.message);
+      res.status(500).send('Could not load delete account page');
+    }
+  });
+});
+app.get('/delete-account.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'delete-account.html'), (err) => {
+    if (err) {
+      Logger.error('static', 'Failed to serve delete-account.html', err.message);
+      res.status(500).send('Could not load delete account page');
+    }
+  });
+});
 
 // Create rate limiters before routes that depend on them.
 const registerLimiter = createRateLimiter('register', 20, 60 * 60); // 20 per hour
